@@ -1,853 +1,542 @@
-# rpdf application plan
+# rpdf eval test plan
 
 ## purpose
 
-Build `rpdf` as a local-first PDF parser application that turns PDFs into high-quality structured output for:
+Turn the "product contract eval" work into durable automated tests so we can keep shipping parser changes without regressing the CLI contract, exit behavior, output layout, or basic JSON shape.
 
-- Markdown and text extraction
-- RAG and LLM pipelines
-- element-level JSON with page coordinates
-- debugging and parser evaluation
-- benchmarking against `pdf-parser-benchmark`
+This plan is intentionally about eval track 1 from the earlier discussion:
 
-The application should be useful on its own as a CLI, while also being easy to wrap from other tools.
+- CLI and shell contract stability
+- output artifact rules
+- exit-code and partial-success behavior
+- JSON contract and basic output-shape invariants
+- inspect command smoke behavior
 
-## product goals
+It is not yet a plan for full parser-quality scoring such as heading recall, reading-order quality, or table-structure accuracy. Those should come later once the parser is doing more than one-paragraph-per-page extraction.
 
-### v1 goals
+## high-level strategy
 
-- Parse digital PDFs locally with no cloud dependency.
-- Produce deterministic output for the same input and same options.
-- Preserve reading order better than plain text dump tools.
-- Emit a canonical structured JSON format and derive Markdown from it.
-- Expose a stable CLI that is easy to script and benchmark.
-- Handle common business and academic PDFs well enough to benchmark honestly.
-- Make failures legible with warnings, partial-success reporting, and stable exit codes.
+Use two layers of tests:
 
-### stretch goals
+- unit tests for pure logic, normalization, validation, and exit-code mapping
+- integration tests for the real `rpdf` binary, filesystem behavior, stdout/stderr rules, and end-to-end artifacts
 
-- OCR support for scanned PDFs.
-- optional hybrid mode for hard pages such as borderless tables, formulas, or poor scans
-- visual debugging output
-- Tagged PDF and structure-tree awareness
-- library API after the CLI is stable
+Use two speed tiers for integration tests:
 
-### non-goals for v1
+- `tests/fast` for repo-local contract tests that should run routinely during local iteration and normal CI
+- `tests/slow` for benchmark-facing compatibility tests that interact with `../pdf-parser-benchmark/` and may require more setup or runtime
 
-- perfect OCR
-- full PDF editing
-- PDF/UA remediation
-- proprietary model dependencies
-- solving every invoice and scientific-paper edge case in the first milestone
+The main rule is:
 
-## advice from nearby repos
+- if the behavior matters to a shell script, benchmark harness, or another tool invoking `rpdf`, prefer an integration test
+- if the behavior is a pure function or helper with a small input/output surface, prefer a unit test
 
-This plan is informed by the sibling repos in `/home/dsweet/Projects/pdfs/`.
+The benchmark-specific rule is:
 
-### from `opendataloader-pdf`
+- keep `rpdf`'s core contract suite self-contained and fast
+- add a small number of slower compatibility tests that exercise the actual benchmark-side expectations from `../pdf-parser-benchmark/`
+- do not turn the full benchmark corpus into part of the normal `cargo test` loop
 
-Useful lessons from:
+## what we are trying to lock down
 
-- `/home/dsweet/Projects/pdfs/opendataloader-pdf/README.md`
-- `/home/dsweet/Projects/pdfs/opendataloader-pdf/options.json`
-- `/home/dsweet/Projects/pdfs/opendataloader-pdf/docs/hybrid/hybrid-mode-design.md`
+### 1. root CLI contract
 
-What to copy:
+We should preserve:
 
-- Make the CLI batch-friendly. That repo repeatedly emphasizes that per-invocation startup is expensive, so users should process multiple files in one call when possible.
-- Make JSON the canonical output model and Markdown a rendered view of that model.
-- Include bounding boxes, page numbers, stable element ids, and semantic element types.
-- Treat reading order as a first-class problem, not an afterthought.
-- Prefer a simple local mode by default, with optional heavier or hybrid paths later.
-- Expose operational flags such as `--pages`, `--use-struct-tree`, output formatting controls, and quiet mode.
-- Be explicit about partial success instead of collapsing every imperfect run into pass or fail.
+- `rpdf --version`
+- `rpdf parse ...`
+- `rpdf inspect ...`
+- stable nonzero exits for invalid invocations
 
-What not to copy too early:
+### 2. parse command contract
 
-- a large cross-language wrapper surface
-- a hybrid server before the local core is trustworthy
-- a very broad option matrix before the core output model stabilizes
+We should preserve:
 
-### from `pypdfium2`
+- valid and invalid flag combinations
+- single-input vs multi-input behavior
+- directory expansion behavior
+- `--stdout`, `--output`, `--json`, `--debug-json`, and `--output-dir` rules
+- no silent overwrite behavior
+- partial-success exit `3`
 
-Useful lessons from:
+### 2a. benchmark compatibility contract
 
-- `/home/dsweet/Projects/pdfs/pypdfium2/README.md`
-- `/home/dsweet/Projects/pdfs/pypdfium2/src/pypdfium2/_helpers/textpage.py`
+We should preserve the parts of `rpdf` that the benchmark side depends on:
 
-What to copy:
+- the benchmark-facing single-document flow maps cleanly to `rpdf parse <input.pdf> --output <output.md>`
+- `rpdf --version` is callable and parseable enough for adapter metadata or logging
+- successful parse writes a Markdown artifact at the caller-directed output path
+- repeated sequential parses work against a shared output directory pattern
+- parser failures surface as clear process failures rather than silent success with missing output
 
-- Use PDFium as a strong low-level engine for opening PDFs, rendering pages, and extracting text geometry.
-- Normalize CRLF to LF in emitted text.
-- Prefer bounded-text extraction or object-aware extraction over naive range slicing.
-- Use character boxes, text rectangles, and page objects as raw signals for a higher-level layout engine.
-- Pin the PDFium version and test against real PDFs because ABI and extraction behavior can shift.
+### 3. output artifact contract
 
-Critical limitation to plan around:
+We should preserve:
 
-- PDFium does not do layout analysis for you. It gives text and geometry, but `rpdf` must supply its own block building, reading-order heuristics, table inference, and element classification.
+- default markdown path for single-input runs
+- implicit output placement for batch runs without `--output-dir`
+- per-stem file naming in batch mode
+- JSON and debug JSON sidecar naming rules
 
-Operational constraint:
+### 4. JSON contract
 
-- PDFium is not thread-safe. `rpdf` should assume one-document-at-a-time processing within a process and use process-level parallelism later if needed.
+We should preserve:
 
-### from `pdf-parser-benchmark`
+- required top-level fields
+- stable status encoding
+- required page and element structure
+- normalized text and bbox shape invariants
+- config echoing for parse-affecting options
 
-Useful lessons from:
+### 5. inspect contract
 
-- `/home/dsweet/Projects/pdfs/pdf-parser-benchmark/README.md`
+We should preserve:
 
-What to copy:
+- inspect returns parseable human-readable metadata
+- expected keys remain present
+- stdout carries report data while warnings stay on stderr
 
-- Measure text quality, structure quality, and table quality separately.
-- Benchmark by domain because rankings shift dramatically by document type.
-- Design for clean CLI invocation and deterministic Markdown output.
+## unit tests to add or expand
 
-Constraint to remember:
+Unit tests should live close to the code they protect.
 
-- The benchmark currently uses Python adapters internally, but `rpdf` itself should still be a standalone CLI. The benchmark-side wrapper can stay thin.
+### `src/parse_validate.rs`
 
-## product shape
+Add focused unit coverage for:
 
-`rpdf` should be a standalone executable first.
+- `--stdout` with `--output`
+- `--stdout` with `--output-dir`
+- `--stdout` with multiple expanded inputs
+- `--output` with multiple expanded inputs
+- `--json` with multiple expanded inputs and no `--output-dir`
+- `--debug-json` with multiple expanded inputs and no `--output-dir`
+- invalid `--reading-order`
+- invalid `--table-mode`
+- valid `--reading-order` and `--table-mode` values
 
-Primary command:
+Reason:
 
-```bash
-rpdf parse input.pdf --output output.md
-```
+- these are pure validation rules and should fail fast without spawning the binary
 
-Required support commands:
+### `src/model.rs`
 
-```bash
-rpdf --version
-rpdf parse input.pdf --stdout
-rpdf parse input.pdf --json output.json
-rpdf inspect input.pdf
-```
+Add or keep unit coverage for:
 
-Recommended batch shape:
+- `RunStatus::exit_code()`
+- `normalize_text()` CRLF and CR normalization
+- serde representation of `RunStatus` as `snake_case`
 
-```bash
-rpdf parse file1.pdf file2.pdf dir/ --output-dir out/
-```
+Reason:
 
-## CLI design
+- these are small contract-critical helpers whose behavior should never drift silently
 
-### command surface
+### `src/parse_cmd/mod.rs`
 
-#### `rpdf parse`
+Add focused unit coverage for:
 
-Core parser command.
+- `parse_config()` default values
+- `parse_config()` propagation of explicit CLI values
+- `load_pages_filter()` success and parse failure cases
 
-Examples:
+Reason:
 
-```bash
-rpdf parse input.pdf --output output.md
-rpdf parse input.pdf --json output.json
-rpdf parse input.pdf --output output.md --json output.json
-rpdf parse input.pdf --stdout
-rpdf parse file1.pdf file2.pdf dir/ --output-dir out/
-```
+- these are pure or mostly pure helpers that define the normalized config recorded in JSON
 
-Flags for v1:
+### `src/parse_batch.rs`
 
-- `--output <path>`: write Markdown to a file
-- `--json <path>`: write structured JSON to a file
-- `--stdout`: write Markdown to stdout
-- `--output-dir <dir>`: directory mode for batch runs
-- `--pages <spec>`: page filter such as `1,3,5-7`
-- `--password <value>`: password for encrypted PDFs
-- `--use-struct-tree`: prefer tagged-PDF structure when present
-- `--reading-order <off|basic|xycut>`: control layout heuristics
-- `--table-mode <off|lines|heuristic>`: table extraction mode
-- `--include-header-footer`: keep detected headers and footers
-- `--keep-line-breaks`: preserve more original line structure
-- `--quiet`: reduce logs
-- `--debug-json <path>`: write extra diagnostic JSON
+Add unit coverage for:
 
-Flags for later phases:
+- `status_outcome()`
+- `batch_exit_code()` for all combinations:
+- all success -> `0`
+- some partial, none failed -> `3`
+- some failed, some success -> `3`
+- all failed -> `2`
 
-- `--ocr`
-- `--ocr-lang <langs>`
-- `--render-dpi <n>`
-- `--hybrid <backend>`
-- `--hybrid-url <url>`
+Reason:
 
-CLI contract:
+- batch exit behavior is part of the shell contract and easy to test directly
 
-- stdout contains only requested document output
-- stderr contains diagnostics
-- exit `0` on success
-- exit nonzero on failure
-- if some pages fail but useful output exists, still emit output and report partial success in JSON and stderr
+### `src/parse_document.rs`
 
-### CLI contract matrix
+Add limited unit coverage for pure helpers only:
 
-The following rules should be treated as part of the v1 CLI contract, not as implementation details.
+- `write_atomic()` refuses overwrite
+- `merge_filter_out_of_range_requests()` records warnings and failed pages
+- stub warning helpers record the correct warnings for unsupported modes
 
-#### input cardinality
+Reason:
 
-- `rpdf parse <input.pdf>` is the canonical single-file form.
-- `rpdf parse <file1> <file2> <dir/> --output-dir <dir>` is the canonical batch form.
-- batch mode is allowed only when `--output-dir` is provided or when the default output location rule is unambiguous.
+- these are contract-bearing helpers that do not need a full binary spawn
 
-#### output mode rules
+Avoid writing unit tests that depend on deep PDFium behavior unless the helper is already clearly isolated and deterministic.
 
-- `--stdout` is single-input only.
-- `--stdout` is Markdown-only in v1.
-- `--stdout` cannot be combined with `--output-dir`.
-- `--stdout` cannot be combined with multiple inputs.
-- `--output <path>` is single-input only.
-- `--output <path>` may be combined with `--json <path>` for single-input runs.
-- `--json <path>` is single-input only.
-- batch mode writes per-input outputs beneath `--output-dir`.
+## integration tests to add or expand
 
-#### default path rules
+Integration tests should continue using the real compiled binary via `Command`.
 
-- for single-input runs with no explicit output flags, `rpdf` should write Markdown next to the input PDF using the same stem and `.md` extension
-- when `--json` is requested without `--output`, JSON should use the caller-provided path in single-input mode
-- in batch mode, default filenames should be derived from each input stem and should avoid silent overwrites
+## integration test tiers
 
-#### partial-success rules
+### fast tests
 
-- `partial_success` means at least one requested page or one requested document failed, but at least one useful output artifact was produced
-- single-input partial success should exit with code `3`
-- batch mode should still complete all independent inputs even if some inputs fail
-- batch mode should emit a per-input status summary to stderr
-- if every requested input fails and no useful output is produced, the run is `failure`, not `partial_success`
-
-#### shell-safety rules
-
-- stdout must remain machine-clean with no progress bars or log lines
-- stderr may contain warnings, summaries, and diagnostics
-- exit codes must be stable enough for scripts and benchmark wrappers
-- invalid flag combinations should fail fast with exit code `1`
-
-#### `rpdf inspect`
-
-Quick diagnostic command for parser development.
-
-Examples:
-
-```bash
-rpdf inspect input.pdf
-rpdf inspect input.pdf --pages 1-2
-```
-
-Outputs:
-
-- page count
-- encryption and tagging info
-- whether a text layer exists
-- basic object counts
-- likely parse strategy
-- warnings about unsupported or suspicious features
-
-#### `rpdf render`
-
-Optional but valuable for development.
-
-Examples:
-
-```bash
-rpdf render input.pdf --page 1 --output page1.png
-```
-
-This is mainly for debugging OCR, bounding boxes, and table heuristics.
-
-## canonical output model
-
-The canonical representation should be JSON, not Markdown.
-
-Suggested top-level shape:
-
-```json
-{
-  "schema_version": "1.0",
-  "parser_version": "0.1.0",
-  "status": "success",
-  "input": "input.pdf",
-  "page_count": 3,
-  "warnings": [],
-  "failed_pages": [],
-  "config": {
-    "reading_order": "basic",
-    "table_mode": "lines"
-  },
-  "pages": [
-    {
-      "page": 1,
-      "width": 612.0,
-      "height": 792.0,
-      "elements": [
-        {
-          "id": "p1-e1",
-          "type": "heading",
-          "bbox": [72.0, 700.0, 540.0, 730.0],
-          "text": "Introduction",
-          "heading_level": 1
-        }
-      ]
-    }
-  ]
-}
-```
-
-Element fields to standardize early:
-
-- `id`
-- `type`
-- `page`
-- `bbox`
-- `text`
-- `children`
-- optional style hints such as font size, bold, italic, list level, table metadata
-
-Core element types:
-
-- `heading`
-- `paragraph`
-- `list`
-- `list_item`
-- `table`
-- `table_row`
-- `table_cell`
-- `code_block`
-- `quote`
-- `image`
-- `caption`
-- `footnote`
-- `formula`
+Fast tests are the default contract-preservation layer:
+
+- repo-local only
+- use the compiled `rpdf` binary directly
+- rely on checked-in fixtures or temp-dir fixtures
+- expected to run in the normal local `cargo test` loop
+
+### slow tests
+
+Slow tests are benchmark-compatibility checks:
+
+- interact with `../pdf-parser-benchmark/`
+- may shell out to Python or the benchmark's test tooling
+- may depend on benchmark fixtures or a local Python environment
+- should be opt-in in day-to-day development, but runnable before benchmark-facing changes land
 
 Design rule:
 
-- Markdown is rendered from the element tree.
-- Plain text is rendered from the same tree.
-- Debug and evaluation tools should prefer JSON.
+- slow tests should be a small smoke layer proving interoperability, not a duplicate of the full benchmark
 
-### v1 schema contract
+Execution rule:
 
-The v1 JSON model should be documented as a versioned contract, even if the first release starts with a hand-written schema document before a full JSON Schema file exists.
+- slow tests must be explicitly gated so they do not run in the default local `cargo test` path by accident
 
-#### required top-level fields
+### CLI contract tests
 
-- `schema_version`: schema contract version such as `1.0`
-- `parser_version`: `rpdf` application version
-- `status`: `success`, `partial_success`, or `failure`
-- `input`: original input path or source identifier
+Keep or expand coverage for:
+
+- `--version` prints `rpdf` version and PDFium tag
+- root help returns `0`
+- parse help returns `0`
+- invalid subcommand usage returns `1`
+
+These mostly already exist; they should remain simple smoke tests, but live under the fast test harness rather than staying as long-lived top-level integration tests.
+
+### benchmark compatibility smoke tests
+
+Add a small set of slow tests that directly interact with `../pdf-parser-benchmark/`.
+
+Target behaviors:
+
+- confirm the neighboring repo exists and expose a clean skip or explicit failure if the benchmark checkout is missing
+- prove `rpdf` can satisfy the benchmark parser contract of "given `pdf_path` and `output_dir`, produce a Markdown file and return its path"
+- prove repeated sequential parses through a benchmark-style output directory succeed
+- prove benchmark-style callers can detect failure when `rpdf` fails on bad input
+
+Two levels of benchmark-facing confidence:
+
+- emulated benchmark compatibility: use a tiny Python snippet or helper that reproduces the benchmark's `parse(pdf_path, output_dir) -> Path` expectations while shelling out to `rpdf`
+- real benchmark integration: exercise an actual `rpdf` adapter that lives on the benchmark side
+
+For now:
+
+- the slow suite may start with emulated benchmark compatibility checks
+- the plan should eventually grow a real benchmark-side `rpdf` adapter and test that adapter directly
+
+Preferred scope for the first version:
+
+- use a tiny subset of benchmark-side expectations
+- exercise one or a few synthetic PDFs rather than a broad corpus
+- assert interoperability, not benchmark scores
+
+Candidate slow tests:
+
+- emulated benchmark contract smoke test on a tiny benchmark fixture if present, or on a tiny fallback fixture if the benchmark corpus is absent
+- benchmark-style sequential parse of 2-3 documents into one output directory
+- benchmark-style invalid-input failure propagation
+- optional version smoke test that records `rpdf --version` output in a benchmark-style context
+- later, real benchmark-adapter smoke test once the benchmark repo contains a thin `rpdf` adapter
+
+Implementation approaches, in order of preference:
+
+1. If we add a thin `rpdf` adapter on the benchmark side, call that adapter from the slow test and assert it returns a valid Markdown `Path`.
+2. If the adapter does not exist yet, run a tiny Python snippet inside `../pdf-parser-benchmark/` that emulates the benchmark parser contract by shelling out to `rpdf parse ... --output ...`.
+3. Only later, if useful, invoke a very small pytest target from the benchmark repo.
+
+Guardrails:
+
+- do not require the full benchmark corpus
+- do not run the full benchmark from `cargo test`
+- keep slow tests focused on contract compatibility and basic execution
+- if benchmark fixtures are missing in the local checkout, skip cleanly or fall back to a tiny local fixture rather than hard-failing on a path assumption
+
+### parse flag matrix tests
+
+Keep current coverage and expand to include:
+
+- `--json` plus multiple explicit inputs without `--output-dir` fails
+- `--debug-json` plus multiple explicit inputs without `--output-dir` fails
+- `--stdout` with a directory that expands to multiple PDFs fails
+- invalid `--reading-order` fails with exit `1`
+- invalid `--table-mode` fails with exit `1`
+- single-input `--output <path> --json <path>` succeeds
+- single-input `--stdout --json <path>` succeeds
+- single-directory input that expands to one PDF can still be used with single-input output flags
+
+These belong in integration tests because the real user-visible contract is the binary exit code plus stderr messaging.
+
+### output path and overwrite tests
+
+Add integration coverage for:
+
+- single-input parse without flags writes next to input as `<stem>.md`
+- single-input parse refuses to overwrite an existing markdown file
+- single-input `--json` refuses to overwrite an existing JSON file
+- single-input `--debug-json` refuses to overwrite an existing debug JSON file
+- batch mode refuses to overwrite an existing target artifact
+- `--output-dir` is created when absent
+- `--output-dir` failure path returns the documented error exit
+
+These are high-value regression tests because file clobbering or path drift will break scripting users quickly.
+
+### stdout and stderr hygiene tests
+
+Add integration coverage for:
+
+- `--stdout` writes document markdown to stdout and not stderr
+- diagnostics and warnings stay on stderr
+- successful non-stdout parse does not print markdown to stderr
+- partial-success run prints the partial-success summary only on stderr
+- `--quiet` suppresses partial-success diagnostics on stderr
+- `--quiet` suppresses stub warning chatter on stderr while preserving JSON `warnings`
+
+This is especially important for benchmark wrappers and shell pipes.
+
+### JSON contract tests
+
+Add or expand integration coverage for:
+
+- required top-level fields exist:
+- `schema_version`
+- `parser_version`
+- `pdfium_binary_tag`
+- `status`
+- `input`
 - `page_count`
 - `warnings`
 - `failed_pages`
-- `config`: normalized parse options that materially affect output
+- `config`
 - `pages`
-
-#### required page fields
-
+- required page fields exist:
 - `page`
 - `width`
 - `height`
 - `elements`
-
-#### required element fields
-
-Every element must have:
-
+- required element fields exist for current paragraph output:
 - `id`
 - `type`
 - `page`
 - `bbox`
-
-Text-bearing elements must also have:
-
 - `text`
+- `bbox` is a 4-number array
+- `config` reflects explicit CLI options in the emitted JSON
+- unsupported options produce warnings in JSON rather than silently disappearing
 
-Nested elements may additionally have:
+Implementation note:
 
-- `children`
+- prefer parsing the JSON with `serde_json::Value` and asserting only on stable contract fields, not the entire pretty-printed blob
 
-#### required type-specific minimums
+### determinism tests
 
-- `heading`: `text`, `heading_level`
-- `paragraph`: `text`
-- `list`: `children`
-- `list_item`: `children` or `text`
-- `table`: `children` or explicit row/cell structure
-- `table_cell`: positional metadata plus `children` or `text`
-- `image`: `bbox`
-- `caption`: `text`
-- `footnote`: `text`
-- `formula`: `text`
+Add integration coverage for:
 
-#### provenance and reproducibility fields
+- running the same parse twice on the same fixture with `--stdout` yields identical stdout
+- running the same parse twice with `--json` yields semantically identical JSON for stable fields
 
-The v1 schema should carry enough metadata to reproduce benchmark results and golden tests:
+We should avoid brittle assertions on absolute temp paths. Compare fields that are intended to be stable, or normalize path-bearing fields before asserting equality.
 
-- parser version
-- selected parse options
-- PDF engine version
-- optional build or feature flags if they materially affect output
+### partial-success and failure tests
 
-#### compatibility policy
+Keep or expand coverage for:
 
-- additive fields are allowed in minor schema revisions
-- renaming or removing required fields requires a major schema version change
-- Markdown rendering should be treated as a derived format, not the compatibility anchor
+- out-of-range page request -> exit `3` with output present
+- all requested pages invalid -> exit `2`
+- full-failure tests should explicitly decide whether artifact absence is required, forbidden, or currently unspecified rather than assuming it from the exit code alone
+- unreadable or invalid PDF input -> exit `2`
+- invalid flag combination -> exit `1`
 
-#### confidence policy
+This is one of the highest-value parts of the contract because scripts need to distinguish usage error from parse failure from partial success.
 
-V1 does not need per-element confidence scores.
+### inspect tests
 
-If confidence is added later:
+Keep or expand coverage for:
 
-- absence of confidence must remain valid for older outputs
-- confidence must not silently change rendering semantics without an explicit config flag
+- inspect prints expected keys on stdout
+- inspect with valid `--pages` works
+- inspect with invalid page spec exits `1`
+- inspect warning path for likely encrypted documents is exercised if we can add a fixture cheaply
 
-#### hidden-content policy
+### render tests
 
-If `rpdf` suppresses hidden, off-page, or suspicious text, the JSON should preserve that fact through warnings or debug artifacts rather than making such drops invisible.
+Until `render` exists, keep a minimal stub test asserting:
 
-## parsing architecture
+- command is present
+- current "not implemented" behavior stays explicit
 
-### phase 1: document ingestion
+Once `render` is implemented, replace the stub test with real artifact and exit-code tests.
 
-- open PDF
-- detect encryption
-- detect page count
-- detect whether a structure tree exists
-- detect whether a usable text layer exists
-- initialize PDFium-backed handles
+## fixture strategy
 
-### phase 2: raw extraction
+Use a small fixture set with explicit roles:
 
-For each page:
+- `sample.pdf` as the baseline happy-path digital PDF
+- a multi-file temp-dir setup for batch and expansion tests
+- a tiny invalid PDF byte file for parse-failure tests
+- later, an encrypted PDF fixture only if we can add one cheaply and legally
+- a tiny subset of `../pdf-parser-benchmark/corpus` or synthetic fixtures for slow benchmark-compatibility tests
 
-- extract page bounds
-- extract text spans or bounded text
-- extract character boxes
-- extract text rectangles
-- extract page objects such as text, images, and vector hints
+Fixture principles:
 
-### phase 3: normalization
+- keep fixtures small for fast local iteration
+- prefer fixtures whose assertions are structural, not prose-heavy
+- avoid overfitting to one exact extracted paragraph unless the test is specifically about text normalization
+- for slow benchmark-facing tests, prefer the benchmark repo's smallest synthetic fixtures over large business or academic documents
+- do not assume benchmark corpus files are present in every local checkout; slow tests need a clean skip path or a tiny fallback fixture
 
-- normalize Unicode
-- normalize line endings from CRLF to LF
-- replace invalid characters deterministically
-- remove or flag clearly hidden or off-page text
-- record warnings instead of silently dropping surprising cases
+## Rust test layout
 
-### phase 4: page segmentation
+We want two visible directories:
 
-Build intermediate structures:
+- `tests/fast`
+- `tests/slow`
 
-- glyphs
-- words
-- lines
-- blocks
+Important implementation note:
 
-This layer is where `rpdf` earns its value. PDFium gives geometry; `rpdf` must assemble logical content.
+- Cargo does not automatically treat nested files under `tests/` as standalone integration-test crates
 
-### phase 5: reading order
+So the layout should be one of these:
 
-Reading order should be configurable but deterministic.
+1. Keep top-level harness files such as `tests/fast.rs` and `tests/slow.rs` that `mod` files from `tests/fast/` and `tests/slow/`.
+2. Or declare explicit `[[test]]` entries in `Cargo.toml` for dedicated harness files that then include modules from those directories.
 
-Suggested modes:
+Recommendation:
 
-- `off`: preserve source-local order as a debugging baseline
-- `basic`: simple top-to-bottom, left-to-right heuristics
-- `xycut`: more advanced block ordering for columns and mixed layouts
+- use `tests/fast.rs` and `tests/slow.rs` as lightweight harness entrypoints
+- keep the actual test files grouped underneath `tests/fast/` and `tests/slow/`
+- make `tests/slow.rs` explicitly opt-in during routine development
+- migrate the current top-level integration tests into `tests/fast/` so every integration test clearly belongs to either the fast or slow tier
 
-Initial strategy:
+Recommended gating mechanisms for `tests/slow.rs`:
 
-- start with `basic`
-- build `xycut` once block segmentation is stable
-- use struct-tree ordering when `--use-struct-tree` is enabled and trustworthy
+- mark slow tests `#[ignore]` and document the explicit run command
+- or require an env var such as `RPDF_RUN_SLOW=1` and skip cleanly when it is absent
+- or combine both for extra safety
 
-### phase 6: semantic classification
+## proposed test file layout
 
-Classify blocks into:
+Keep integration tests grouped first by speed tier, then by contract area rather than by internal module:
 
-- headings
-- paragraphs
-- lists
-- tables
-- code blocks
-- captions
-- footnotes
+- `tests/fast.rs` as the fast integration-test harness
+- `tests/slow.rs` as the slow integration-test harness
+- `tests/fast/cli_root.rs` for root help and version behavior
+- `tests/fast/parse_flag_matrix.rs` for invalid/valid CLI combinations
+- `tests/fast/parse_outputs.rs` for markdown output-path rules and overwrite behavior
+- `tests/fast/parse_json_contract.rs` for JSON structure and config echoing
+- `tests/fast/parse_stdout_stderr.rs` for shell hygiene
+- `tests/fast/parse_batch_contract.rs` for batch semantics and per-stem outputs
+- `tests/fast/parse_status_codes.rs` for success, partial success, usage error, and failure
+- `tests/fast/inspect_contract.rs` for inspect behavior
+- `tests/fast/render_contract.rs` for stub behavior now and real behavior later
+- `tests/slow/benchmark_adapter_smoke.rs` for benchmark-style parse contract checks
+- `tests/slow/benchmark_sequential.rs` for repeated parse behavior against a shared output directory
+- `tests/slow/benchmark_failure_surface.rs` for benchmark-visible failure propagation
 
-Signals:
+We do not need to rename existing files immediately, but new coverage should move toward this grouping so the suite stays readable.
 
-- font size
-- font weight
-- indentation
-- alignment
-- bullet and numbering patterns
-- ruling lines
-- whitespace gaps
-- column boundaries
-- repetition across pages for header/footer detection
+Migration note:
 
-### phase 7: table extraction
+- move the current top-level integration tests into `tests/fast/`
+- keep their coverage intact while renaming or regrouping by contract area
+- do not leave long-lived integration tests at the top level once the new harness structure exists
 
-Table extraction should be its own subsystem, not buried inside paragraph logic.
+For execution ergonomics:
 
-V1 strategy:
+- fast tests should be the default
+- slow tests should be easy to run separately when touching benchmark-facing code paths
+- document the exact commands once the harness layout is implemented
+- the default `cargo test` path should not execute slow tests unless the explicit slow-test gate is enabled
 
-- detect border-based tables
-- detect aligned text grids without borders when obvious
-- produce a structured table model even if Markdown rendering is imperfect
+## implementation order
 
-Important product choice:
+### phase 1: finish pure contract unit tests
 
-- prefer correct table structure in JSON first
-- render Markdown tables only when confidence is high
-- otherwise degrade gracefully with warnings rather than hallucinating a clean table
+Start with the cheap, stable unit tests:
 
-### phase 8: rendering
+- validation matrix
+- config normalization
+- exit-code mapping
+- overwrite helpers
 
-Render outputs from the canonical element tree:
+### phase 2: fill the biggest integration gaps
 
-- Markdown
-- plain text
-- JSON
+Add integration tests for:
 
-Rendering goals:
+- overwrite protection
+- stdout/stderr hygiene
+- JSON required-field contract
+- invalid mode values
 
-- stable output across runs
-- no incidental whitespace churn
-- preserve heading hierarchy
-- preserve lists and tables when confidence allows
+### phase 3: add slow benchmark-compatibility smoke tests
 
-## architecture modules
+Add a minimal slow suite that interacts with `../pdf-parser-benchmark/`:
 
-Suggested Rust crate layout:
-
-- `rpdf-cli`: argument parsing and process exit behavior
-- `rpdf-core`: orchestration, types, configuration
-- `rpdf-pdfium`: PDFium bindings adapter layer
-- `rpdf-layout`: words, lines, blocks, reading order
-- `rpdf-structure`: headings, lists, tables, captions, footnotes
-- `rpdf-render`: Markdown, text, JSON emitters
-- `rpdf-debug`: debug dumps, overlay data, diagnostics
-- `rpdf-ocr`: optional future OCR support
-
-Key design principle:
-
-- keep PDFium-specific code behind a small boundary
-- keep parsing logic engine-agnostic where possible
-
-## failure model
-
-`rpdf` should explicitly model:
-
-- `success`
-- `partial_success`
-- `failure`
-
-Partial success cases:
-
-- one page fails to classify
-- one page is encrypted or corrupted while others load
-- table extraction fails but text extraction succeeds
-- OCR fallback unavailable for scanned pages
-
-Expected behavior:
-
-- JSON includes `status`, `warnings`, and `failed_pages`
-- CLI prints a concise summary to stderr
-- exit code policy remains predictable
-
-Suggested exit codes:
-
-- `0`: success
-- `1`: usage or configuration error
-- `2`: parse failure with no usable output
-- `3`: partial success
-
-## benchmark strategy
-
-### external benchmark compatibility
-
-For `pdf-parser-benchmark`, the important interface remains:
-
-```bash
-rpdf parse input.pdf --output output.md
-rpdf --version
-```
-
-Even if the benchmark keeps a Python adapter internally, `rpdf` should not depend on Python.
-
-### internal evaluation loop
-
-Before chasing leaderboard results, `rpdf` should maintain its own regression suite across:
-
-- legal and contract PDFs
-- invoices and table-heavy documents
-- HR and resume-style documents
-- multi-column articles
-- tagged PDFs
-- rotated pages
-- image-heavy and scanned PDFs
-
-Metrics to track:
-
-- exact and normalized text diff
-- reading-order error cases
-- heading precision and recall
-- list preservation
-- table structure accuracy
-- parse time per page
-- crash-free rate
-
-### evaluation philosophy
-
-- optimize by document class, not only by overall score
-- separate text, structure, and table quality
-- keep a small fast corpus for iteration and a larger corpus for release gates
-
-## implementation roadmap
-
-### milestone 0: repo bootstrap
-
-- create Cargo workspace
-- choose PDFium binding strategy
-- define core types
-- implement `rpdf --version`
-- implement `rpdf inspect input.pdf`
+- one basic parse-success smoke test
+- one sequential multi-document smoke test
+- one failure-propagation smoke test
 
 Exit criterion:
 
-- can open PDFs, report metadata, and fail cleanly
+- we can prove `rpdf` satisfies the benchmark-side parser contract on a tiny representative slice without running the whole benchmark
 
-### milestone 1: raw text and JSON skeleton
+### phase 3a: add a real benchmark-side adapter
 
-- open pages
-- extract raw text and geometry
-- normalize Unicode and line endings
-- emit basic page JSON with raw spans
+Once the emulated slow smoke tests are useful:
 
-Exit criterion:
-
-- can produce structured debug JSON for real PDFs
-
-### milestone 2: block building and basic Markdown
-
-- build words, lines, and blocks
-- implement basic reading order
-- emit paragraphs and headings
-- render Markdown and text
+- add a thin `rpdf` adapter in `../pdf-parser-benchmark/` that implements the benchmark's `BaseParser` contract
+- add at least one slow test that calls that real adapter instead of only emulating the contract from the `rpdf` repo side
 
 Exit criterion:
 
-- useful Markdown on simple digital PDFs
+- benchmark-facing compatibility is proven through the real adapter surface, not only through a local emulation helper
 
-### milestone 3: lists, headers/footers, and tables
+### phase 4: add determinism checks
 
-- detect lists
-- detect repeated headers and footers
-- implement first table detector
-- improve Markdown stability
+Once the core contract suite is green, add:
 
-Exit criterion:
+- repeated-run stdout equality
+- repeated-run JSON stability checks on stable fields
 
-- good results on synthetic and business PDFs with moderate structure
+### phase 5: refactor the suite for maintainability
 
-### milestone 4: benchmark readiness
+Only after the key coverage exists:
 
-- lock CLI interface
-- add deterministic output tests
-- compare against nearby benchmark corpora
-- tune for `pdf-parser-benchmark` compatibility
+- consolidate overlapping tests
+- group files by contract area
+- extract small test helpers for temp dirs, fixture lookup, and JSON loading
 
-Exit criterion:
+## definition of done
 
-- `rpdf parse input.pdf --output out.md` is stable enough to benchmark
+This contract-eval plan is complete when:
 
-### milestone 5: advanced structure
+- every documented v1 CLI rule has either a unit test or an integration test
+- shell-visible behavior is covered by integration tests
+- pure validation and mapping logic is covered by unit tests
+- the suite clearly distinguishes exit `1`, `2`, and `3`
+- JSON required fields and basic shape are locked down
+- stdout/stderr cleanliness is protected
+- `rpdf` has a small slow smoke suite proving compatibility with `../pdf-parser-benchmark/`
+- tests are fast enough to run routinely during local iteration
 
-- add `--use-struct-tree`
-- improve multi-column ordering
-- improve caption and footnote handling
-- add richer JSON metadata
+## what not to do yet
 
-### milestone 6: OCR or hybrid path
+Do not spend early effort on:
 
-- add optional OCR module for image-only PDFs
-- optionally add hybrid routing for complex pages
-- preserve the local deterministic path as default
+- exact Markdown golden files for complex PDFs
+- parser-quality scoring for headings, lists, or tables
+- large benchmark corpora inside the normal test suite
+- brittle assertions on incidental clap help formatting
+- broad snapshot tests of whole JSON blobs when only a few fields matter
 
-## technical choices to make early
-
-### 1. PDF engine
-
-Current best direction:
-
-- use PDFium for low-level extraction and rendering
-
-Reason:
-
-- strong low-level capabilities
-- liberal licensing story compared with some alternatives
-- good geometry support
-- good rendering support for future OCR fallback
-
-Risk:
-
-- PDFium does not provide layout analysis
-- PDFium version changes can alter behavior
-
-Mitigation:
-
-- pin versions
-- keep golden tests
-- isolate engine-specific code
-
-### 1a. PDFium packaging and version policy
-
-This decision should be locked before deep parser work begins.
-
-#### v1 default policy
-
-- ship `rpdf` as a standalone Rust CLI with a pinned PDFium dependency strategy
-- prefer vendored or otherwise reproducible PDFium builds for official releases
-- treat system PDFium as an advanced or developer-oriented option, not the primary release path
-
-#### why
-
-- nearby PDFium tooling shows that ABI and version mismatches are a real engineering concern
-- reproducible benchmark results depend on stable engine behavior
-- users should not need to solve PDFium discovery before trying `rpdf`
-
-#### explicit decision points
-
-The implementation must choose and document:
-
-1. whether official binaries bundle PDFium or dynamically link to a pinned system package
-2. which PDFium version is pinned for the first release
-3. whether XFA or similar optional features are enabled
-4. how Linux, macOS, and Windows builds obtain matching binaries
-
-#### acceptance criteria
-
-- `rpdf --version` should report both `rpdf` version and PDF engine version in a machine-readable or clearly parseable way
-- CI must exercise the pinned PDFium configuration used for official releases
-- golden-output tests must run against the same engine configuration used in release artifacts
-- unsupported local engine overrides must be clearly labeled as such
-
-#### fallback policy
-
-- developer builds may support a custom or system PDFium override
-- release notes and bug reports should always capture which PDFium build was used
-- any mode that allows engine overrides should be excluded from the default reproducibility story
-
-### 2. canonical representation
-
-Current best direction:
-
-- JSON element tree as the source of truth
-
-Reason:
-
-- supports Markdown, text, debug tooling, and RAG
-- easier to test than Markdown-only output
-- aligns with the strongest neighboring design in `opendataloader-pdf`
-
-### 3. concurrency model
-
-Current best direction:
-
-- no shared-document multithreading in core parsing
-- add process-level document parallelism later
-
-Reason:
-
-- safer with PDFium
-- easier to debug
-
-### 4. OCR timing
-
-Hypothesis:
-
-Adding OCR too early may slow progress and blur the quality bar for the digital-PDF core.
-
-Predictions:
-
-- early OCR work will increase complexity before line, block, and table logic stabilize
-- digital-PDF quality will improve faster if OCR is deferred
-
-Test:
-
-- first benchmark only digital and text-layer PDFs
-- add scanned corpus only after stable Markdown and JSON on digital PDFs
-
-Confounders:
-
-- if the target users primarily care about scans, the product priorities may need to change
-
-## developer ergonomics
-
-`rpdf` should be pleasant to debug.
-
-Add from early stages:
-
-- `--debug-json`
-- `inspect` command
-- optional per-page dumps
-- stable warnings
-- small fixture corpus checked into the repo if licensing allows
-
-Helpful later:
-
-- render page overlays with detected blocks, tables, and reading order
-- compare JSON output between versions
-
-## release criteria for first public version
-
-The first public version should not wait for perfection. It should ship when:
-
-- the CLI is stable
-- Markdown output is useful on simple and moderate digital PDFs
-- JSON output is coherent and documented
-- failures are explicit
-- there is a benchmark story
-- there is a small regression corpus
-
-## open questions
-
-1. Should `rpdf` be a single binary only, or should it also expose a Rust library API in v1?
-[dsweet] single binary
-2. Should `xycut` be implemented in v1 or staged behind `basic` reading order first?
-[dsweet] staged
-3. How aggressive should header/footer stripping be by default?
-[dsweet] idk
-4. Should Markdown tables be emitted only when confidence is high, with JSON carrying richer structure?
-[dsweet] yes
-5. Is OCR important enough for the first public milestone, or should it wait until after benchmark readiness?
-[dsweet] wait
-
-## current recommendation
-
-Build `rpdf` as:
-
-- a standalone Rust CLI
-- powered by PDFium for low-level extraction
-- with a canonical JSON element tree
-- with Markdown generated from that tree
-- focused first on digital PDFs
-- benchmark-friendly through a stable `parse` command
-
-Do not start with:
-
-- Python bindings
-- a multi-language SDK
-- hybrid backends
-- OCR-first complexity
-
-The fastest route to a strong application is:
-
-1. stable CLI
-2. trustworthy JSON schema
-3. reading-order and block heuristics
-4. table extraction
-5. benchmark feedback
-6. optional OCR and hybrid expansion
+Those belong in later parser-quality eval work, not this contract-preservation layer.

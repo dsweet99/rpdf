@@ -7,8 +7,14 @@ mod inspect_cmd;
 mod markdown;
 mod model;
 mod pagespec;
+mod parse_batch;
 mod parse_cmd;
 mod parse_document;
+mod parse_validate;
+mod render_cmd;
+
+#[cfg(test)]
+mod test_support;
 
 pub use engine::PDFIUM_BINARY_TAG;
 pub use model::normalize_text;
@@ -29,6 +35,7 @@ where
         Ok(root) => match root.command {
             cli::Commands::Parse(p) => parse_cmd::run_parse(&p),
             cli::Commands::Inspect(i) => inspect_cmd::run_inspect(&i),
+            cli::Commands::Render(r) => render_cmd::run_render(&r),
         },
         Err(e) => {
             use clap::error::ErrorKind;
@@ -63,7 +70,9 @@ mod tests {
     fn version_is_non_empty_semver_like() {
         let v = version_string();
         assert!(!v.is_empty());
-        assert!(v.chars().all(|c| c.is_ascii_digit() || c == '.'));
+        assert!(v.chars().all(|c| {
+            c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+'
+        }));
     }
 
     #[test]
@@ -95,6 +104,16 @@ mod tests {
         let args = vec![
             OsString::from("rpdf"),
             OsString::from("parse"),
+            OsString::from("--help"),
+        ];
+        assert_eq!(run_from_args(args.into_iter()), 0);
+    }
+
+    #[test]
+    fn inspect_help_flag_returns_0() {
+        let args = vec![
+            OsString::from("rpdf"),
+            OsString::from("inspect"),
             OsString::from("--help"),
         ];
         assert_eq!(run_from_args(args.into_iter()), 0);

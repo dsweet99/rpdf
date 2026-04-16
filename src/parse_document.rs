@@ -10,8 +10,15 @@ use std::path::Path;
 
 const SCHEMA: &str = "1.0";
 
+pub fn eprint_partial_success(quiet: bool, status: RunStatus, failed_pages: &[u32]) {
+    if quiet || status != RunStatus::PartialSuccess {
+        return;
+    }
+    eprintln!("partial_success: failed_pages={failed_pages:?}");
+}
+
 fn append_stub_config_warnings(cfg: &ParseConfig, warnings: &mut Vec<String>, quiet: bool) {
-    if cfg.reading_order != "basic" {
+    if cfg.reading_order != "basic" && cfg.reading_order != "off" {
         warnings.push(
             "reading-order layout modes are not implemented; output uses one paragraph per page in extraction order"
                 .to_string(),
@@ -84,6 +91,7 @@ fn extract_page_outputs(
                     page: page_num,
                     bbox,
                     text,
+                    children: Vec::new(),
                 };
                 pages_out.push(PageOut {
                     page: page_num,
@@ -175,7 +183,7 @@ pub fn build_document_json(
     (dj, md)
 }
 
-pub fn write_atomic(
+pub fn write_exclusive(
     path: &Path,
     write: impl FnOnce(&mut Vec<u8>) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -187,13 +195,17 @@ pub fn write_atomic(
     fs::write(path, buf).map_err(|e| e.to_string())
 }
 
+pub fn write_json_document(path: &Path, dj: &DocumentJson) -> Result<(), String> {
+    write_exclusive(path, |w| serde_json::to_writer_pretty(w, dj).map_err(|e| e.to_string()))
+}
+
 #[cfg(test)]
 mod tests_stub {
     use super::append_stub_config_warnings;
     use crate::model::ParseConfig;
 
     #[test]
-    fn nondefault_reading_order_warns() {
+    fn reading_order_off_skips_reading_order_stub_warnings() {
         let mut w = Vec::new();
         let cfg = ParseConfig {
             reading_order: "off".to_string(),
@@ -203,18 +215,130 @@ mod tests_stub {
             keep_line_breaks: false,
         };
         append_stub_config_warnings(&cfg, &mut w, true);
+        assert!(!w.iter().any(|s| s.contains("reading-order")));
+    }
+
+    #[test]
+    fn xycut_reading_order_warns() {
+        let mut w = Vec::new();
+        let cfg = ParseConfig {
+            reading_order: "xycut".to_string(),
+            table_mode: "off".to_string(),
+            use_struct_tree: false,
+            include_header_footer: false,
+            keep_line_breaks: false,
+        };
+        append_stub_config_warnings(&cfg, &mut w, true);
         assert!(w.iter().any(|s| s.contains("reading-order")));
+    }
+
+    #[test]
+    fn nondefault_table_mode_warns() {
+        let mut w = Vec::new();
+        let cfg = ParseConfig {
+            reading_order: "basic".to_string(),
+            table_mode: "lines".to_string(),
+            use_struct_tree: false,
+            include_header_footer: false,
+            keep_line_breaks: false,
+        };
+        append_stub_config_warnings(&cfg, &mut w, true);
+        assert!(w.iter().any(|s| s.contains("table")));
+    }
+
+    #[test]
+    fn include_header_footer_warns() {
+        let mut w = Vec::new();
+        let cfg = ParseConfig {
+            reading_order: "basic".to_string(),
+            table_mode: "off".to_string(),
+            use_struct_tree: false,
+            include_header_footer: true,
+            keep_line_breaks: false,
+        };
+        append_stub_config_warnings(&cfg, &mut w, true);
+        assert!(w.iter().any(|s| s.contains("header")));
+    }
+
+    #[test]
+    fn keep_line_breaks_warns() {
+        let mut w = Vec::new();
+        let cfg = ParseConfig {
+            reading_order: "basic".to_string(),
+            table_mode: "off".to_string(),
+            use_struct_tree: false,
+            include_header_footer: false,
+            keep_line_breaks: true,
+        };
+        append_stub_config_warnings(&cfg, &mut w, true);
+        assert!(w.iter().any(|s| s.contains("line")));
+    }
+}
+
+#[cfg(test)]
+mod merge_and_exclusive_tests {
+    use super::{merge_filter_out_of_range_requests, write_exclusive};
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn merge_filter_records_out_of_range_pages() {
+        let mut warnings = Vec::new();
+        let mut failed_pages = Vec::new();
+        let mut set = BTreeSet::new();
+        set.insert(9_u16);
+        merge_filter_out_of_range_requests(Some(&set), 1, &mut warnings, &mut failed_pages);
+        assert!(warnings.iter().any(|w| w.contains("out of range")));
+        assert!(failed_pages.contains(&9));
+    }
+
+    #[test]
+    fn write_exclusive_refuses_existing_path() {
+        let dir = std::env::temp_dir().join(format!("rpdf_wa_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let p = dir.join("out.bin");
+        write_exclusive(&p, |b| {
+            b.extend_from_slice(b"a");
+            Ok(())
+        })
+        .expect("first write");
+        let err = write_exclusive(&p, |b| {
+            b.extend_from_slice(b"b");
+            Ok(())
+        })
+        .expect_err("second write");
+        assert!(err.contains("refusing to overwrite"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_exclusive_writes_when_absent() {
+        let dir = std::env::temp_dir().join(format!("rpdf_wa2_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let p: PathBuf = dir.join("new.bin");
+        write_exclusive(&p, |b| {
+            b.extend_from_slice(b"z");
+            Ok(())
+        })
+        .expect("write");
+        assert_eq!(std::fs::read(&p).expect("read"), b"z");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
 #[cfg(test)]
 mod kiss_coverage {
+    use crate::model::RunStatus;
+
     #[test]
     fn handler_refs() {
         assert_eq!(
             stringify!(super::build_document_json),
             "super::build_document_json"
         );
-        assert_eq!(stringify!(super::write_atomic), "super::write_atomic");
+        assert_eq!(stringify!(super::write_exclusive), "super::write_exclusive");
+        let _: fn(bool, RunStatus, &[u32]) = super::eprint_partial_success;
     }
 }

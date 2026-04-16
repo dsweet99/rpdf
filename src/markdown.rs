@@ -4,7 +4,7 @@ pub fn pages_to_markdown(pages: &[PageOut]) -> String {
     let mut blocks = Vec::new();
     for p in pages {
         for e in &p.elements {
-            if e.kind == "paragraph" {
+            if e.kind == "paragraph" && e.children.is_empty() {
                 blocks.push(e.text.clone());
             }
         }
@@ -29,6 +29,7 @@ mod tests {
                 page: 1,
                 bbox: [0.0, 0.0, 1.0, 1.0],
                 text: "a".to_string(),
+                children: Vec::new(),
             }],
         };
         assert_eq!(pages_to_markdown(&[p]), "a");

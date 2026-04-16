@@ -12,6 +12,16 @@ pub struct Root {
 pub enum Commands {
     Parse(ParseCli),
     Inspect(InspectCli),
+    Render(RenderCli),
+}
+
+#[derive(Parser)]
+pub struct RenderCli {
+    pub input: PathBuf,
+    #[arg(long)]
+    pub page: u32,
+    #[arg(long)]
+    pub output: PathBuf,
 }
 
 #[derive(Parser)]
@@ -68,5 +78,6 @@ mod kiss_coverage {
         let _ = std::mem::size_of::<Commands>();
         let _ = std::mem::size_of::<ParseCli>();
         let _ = std::mem::size_of::<InspectCli>();
+        let _ = std::mem::size_of::<RenderCli>();
     }
 }

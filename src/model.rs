@@ -8,6 +8,17 @@ pub enum RunStatus {
     Failure,
 }
 
+impl RunStatus {
+    #[must_use]
+    pub const fn exit_code(self) -> i32 {
+        match self {
+            Self::Success => 0,
+            Self::PartialSuccess => 3,
+            Self::Failure => 2,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ParseConfig {
     pub reading_order: String,
@@ -25,6 +36,8 @@ pub struct Element {
     pub page: u32,
     pub bbox: [f32; 4],
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<Self>,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,10 +73,35 @@ mod kiss_coverage {
     #[test]
     fn model_symbols() {
         let _ = std::mem::size_of::<RunStatus>();
+        let _: fn(RunStatus) -> i32 = RunStatus::exit_code;
         let _ = std::mem::size_of::<ParseConfig>();
         let _ = std::mem::size_of::<Element>();
         let _ = std::mem::size_of::<PageOut>();
         let _ = std::mem::size_of::<DocumentJson>();
         let _: fn(&str) -> String = normalize_text;
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn run_status_exit_codes() {
+        assert_eq!(RunStatus::Success.exit_code(), 0);
+        assert_eq!(RunStatus::PartialSuccess.exit_code(), 3);
+        assert_eq!(RunStatus::Failure.exit_code(), 2);
+    }
+
+    #[test]
+    fn normalize_text_crlf_and_cr() {
+        assert_eq!(normalize_text("a\r\nb"), "a\nb");
+        assert_eq!(normalize_text("a\rb"), "a\nb");
+    }
+
+    #[test]
+    fn run_status_serializes_snake_case() {
+        let v = serde_json::to_value(RunStatus::PartialSuccess).expect("json");
+        assert_eq!(v, serde_json::json!("partial_success"));
     }
 }
