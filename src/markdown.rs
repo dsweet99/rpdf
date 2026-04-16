@@ -9,7 +9,7 @@ pub fn pages_to_markdown(pages: &[PageOut]) -> String {
             }
         }
     }
-    blocks.join("\n\n")
+    blocks.join("\n")
 }
 
 #[cfg(test)]
