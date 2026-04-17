@@ -5,6 +5,7 @@ mod engine;
 mod expand;
 mod inspect_cmd;
 mod markdown;
+mod model_dedup;
 mod model_pipe_table;
 mod model_report_headings;
 mod model_postprocess_lines;
@@ -23,6 +24,7 @@ mod test_support;
 
 pub use engine::PDFIUM_BINARY_TAG;
 pub use model::normalize_text;
+pub use model::postprocess_extracted_markdown;
 
 #[must_use]
 pub const fn version_string() -> &'static str {

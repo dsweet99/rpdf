@@ -94,10 +94,10 @@ fn extract_text_segment_reading_order(t: &PdfPageText<'_>, page_width: f32) -> S
 }
 
 fn raw_page_text(t: &PdfPageText<'_>, page_width: f32, cfg: &ParseConfig) -> String {
-    if cfg.reading_order == "off" {
-        return t.all();
+    if cfg.reading_order == "segments" {
+        return extract_text_segment_reading_order(t, page_width);
     }
-    extract_text_segment_reading_order(t, page_width)
+    t.all()
 }
 
 fn extract_page_outputs(
