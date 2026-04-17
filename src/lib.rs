@@ -5,12 +5,17 @@ mod engine;
 mod expand;
 mod inspect_cmd;
 mod markdown;
+mod model_pipe_table;
+mod model_report_headings;
+mod model_postprocess_lines;
+mod model_postprocess;
 mod model;
 mod pagespec;
 mod parse_batch;
 mod parse_cmd;
 mod parse_document;
 mod parse_validate;
+mod reading_order;
 mod render_cmd;
 
 #[cfg(test)]

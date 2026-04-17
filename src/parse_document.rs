@@ -65,9 +65,45 @@ fn push_initial_warnings(cfg: &ParseConfig, quiet: bool) -> Vec<String> {
     warnings
 }
 
+fn extract_text_segment_reading_order(t: &PdfPageText<'_>, page_width: f32) -> String {
+    let segs = t.segments();
+    if segs.is_empty() {
+        return t.all();
+    }
+    let mut rows: Vec<(f32, f32, String)> = Vec::new();
+    for i in 0..segs.len() {
+        let Ok(seg) = segs.get(i) else {
+            continue;
+        };
+        let txt = seg.text();
+        let trimmed = txt.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let b = seg.bounds();
+        rows.push((b.top().value, b.left().value, trimmed.to_string()));
+    }
+    if rows.is_empty() {
+        return t.all();
+    }
+    crate::reading_order::sort_segment_rows_by_reading_order(&mut rows, page_width);
+    rows.into_iter()
+        .map(|(_, _, s)| s)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn raw_page_text(t: &PdfPageText<'_>, page_width: f32, cfg: &ParseConfig) -> String {
+    if cfg.reading_order == "off" {
+        return t.all();
+    }
+    extract_text_segment_reading_order(t, page_width)
+}
+
 fn extract_page_outputs(
     doc: &PdfDocument<'_>,
     filter: Option<&BTreeSet<u16>>,
+    cfg: &ParseConfig,
 ) -> (Vec<PageOut>, Vec<u32>) {
     let mut pages_out = Vec::new();
     let mut failed_pages = Vec::new();
@@ -82,7 +118,7 @@ fn extract_page_outputs(
         let height = page.height().value;
         match page.text() {
             Ok(t) => {
-                let raw = t.all();
+                let raw = raw_page_text(&t, width, cfg);
                 let text = model::normalize_text(raw.as_str());
                 let bbox = paragraph_bbox_union(&t, width, height);
                 let el = Element {
@@ -156,7 +192,7 @@ pub fn build_document_json(
 ) -> (DocumentJson, String) {
     let mut warnings = push_initial_warnings(&cfg, quiet);
     let page_count = doc.pages().len() as u32;
-    let (pages_out, mut failed_pages) = extract_page_outputs(doc, filter);
+    let (pages_out, mut failed_pages) = extract_page_outputs(doc, filter, &cfg);
     merge_filter_out_of_range_requests(filter, page_count, &mut warnings, &mut failed_pages);
     failed_pages.sort_unstable();
     failed_pages.dedup();

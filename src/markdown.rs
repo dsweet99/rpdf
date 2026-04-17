@@ -9,7 +9,7 @@ pub fn pages_to_markdown(pages: &[PageOut]) -> String {
             }
         }
     }
-    blocks.join("\n")
+    blocks.join("\n\n")
 }
 
 #[cfg(test)]
@@ -33,5 +33,25 @@ mod tests {
             }],
         };
         assert_eq!(pages_to_markdown(&[p]), "a");
+    }
+
+    #[test]
+    fn markdown_joins_pages_with_blank_line() {
+        let mk = |page: u32, text: &str| PageOut {
+            page,
+            width: 100.0,
+            height: 100.0,
+            elements: vec![Element {
+                id: format!("p{page}-e1"),
+                kind: "paragraph".to_string(),
+                page,
+                bbox: [0.0, 0.0, 1.0, 1.0],
+                text: text.to_string(),
+                children: Vec::new(),
+            }],
+        };
+        let a = mk(1, "a");
+        let b = mk(2, "b");
+        assert_eq!(pages_to_markdown(&[a, b]), "a\n\nb");
     }
 }
