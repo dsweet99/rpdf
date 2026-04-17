@@ -147,9 +147,38 @@ mod contract_tests {
     }
 
     #[test]
-    fn postprocess_heading_space_break() {
+    fn postprocess_table_section_heading_respects_max_len() {
+        let short = "TABLE-01: Basic Data Table\n\nx";
+        let o = postprocess_extracted_markdown(short);
+        assert!(o.contains("## TABLE-01:"), "{o}");
+        let long = format!("TABLE-99:{}\n\nx", "a".repeat(56));
+        let o2 = postprocess_extracted_markdown(&long);
+        assert!(!o2.contains("## TABLE-99:"), "{o2}");
+    }
+
+    #[test]
+    fn postprocess_table_label_line_keeps_heading_after_wrapped_body_line() {
+        let s = concat!(
+            "TABLE-03: Regional Performance\n",
+            "Regional performance analysis reveals diverse growth patterns.\n",
+        );
+        let o = postprocess_extracted_markdown(s);
+        assert!(
+            o.contains("## TABLE-03: Regional Performance"),
+            "expected promoted heading, got:\n{o}"
+        );
+    }
+
+    #[test]
+    fn postprocess_heading_space_break_short() {
         let s = "Intro # Title here";
-        assert_eq!(postprocess_extracted_markdown(s), "Intro\n\n# Title here");
+        assert_eq!(postprocess_extracted_markdown(s), "Intro\n# Title here");
+    }
+
+    #[test]
+    fn postprocess_heading_space_break_long() {
+        let s = "This is a long paragraph that ends with proper punctuation and has sufficient length to trigger blank line insertion. # Title here";
+        assert!(postprocess_extracted_markdown(s).contains("\n\n# Title here"));
     }
 
     #[test]
