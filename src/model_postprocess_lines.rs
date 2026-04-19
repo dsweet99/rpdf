@@ -178,6 +178,7 @@ pub fn join_list_item_continuations(s: &str) -> String {
     lines.join("\n")
 }
 
+#[allow(dead_code)]
 pub fn join_pdf_wrapped_prose_lines(s: &str) -> String {
     let mut lines: Vec<String> = s.lines().map(String::from).collect();
     let mut i = 0usize;
@@ -198,6 +199,7 @@ pub fn join_pdf_wrapped_prose_lines(s: &str) -> String {
     lines.join("\n")
 }
 
+#[allow(dead_code)]
 fn should_join_prose_pair(cur: &str, next: &str) -> bool {
     let c = cur.trim_end();
     let n = next.trim_start();
@@ -234,6 +236,7 @@ fn should_join_prose_pair(cur: &str, next: &str) -> bool {
     c.len() >= 50 || last_char == '-' || last_char == ',' || first_char.is_lowercase() || n_continues
 }
 
+#[allow(dead_code)]
 fn soft_hyphen_join(cur: &str, next: &str) -> bool {
     let c = cur.trim_end();
     let n = next.trim_start();
@@ -253,10 +256,22 @@ fn soft_hyphen_join(cur: &str, next: &str) -> bool {
         return false;
     }
     let last_lower = last_word.to_lowercase();
-    matches!(
-        &last_lower[last_lower.len() - 3..],
-        "fac" | "tio" | "atu" | "ati" | "tra" | "rva" | "stu" | "uli" | "rta" | "esu" | "ani"
-    )
+    has_suffix3(&last_lower, "fac")
+        || has_suffix3(&last_lower, "tio")
+        || has_suffix3(&last_lower, "atu")
+        || has_suffix3(&last_lower, "ati")
+        || has_suffix3(&last_lower, "tra")
+        || has_suffix3(&last_lower, "rva")
+        || has_suffix3(&last_lower, "stu")
+        || has_suffix3(&last_lower, "uli")
+        || has_suffix3(&last_lower, "rta")
+        || has_suffix3(&last_lower, "esu")
+        || has_suffix3(&last_lower, "ani")
+}
+
+#[allow(dead_code)]
+fn has_suffix3(s: &str, suffix: &str) -> bool {
+    s.chars().rev().take(3).collect::<String>().chars().rev().collect::<String>() == suffix
 }
 
 #[cfg(test)]

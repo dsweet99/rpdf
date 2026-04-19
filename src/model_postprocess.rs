@@ -115,12 +115,7 @@ pub fn postprocess_extracted_markdown(s: &str) -> String {
     let s = finalize_pipe_table_separators(&s);
     let s = model_postprocess_lines::join_list_item_continuations(&s);
     let s = model_postprocess_lines::ensure_blank_line_before_atx_headings(&s);
-    let s = apply_heading_and_list_patterns(&s);
-    if model_dedup::has_atx_headings(&s) {
-        model_postprocess_lines::join_pdf_wrapped_prose_lines(&s)
-    } else {
-        s
-    }
+    apply_heading_and_list_patterns(&s)
 }
 
 fn merge_wrapped_title_lines_once(s: &str) -> String {

@@ -134,6 +134,7 @@ pub fn blank_line_between_metadata_fields(s: &str) -> String {
     out.join("\n")
 }
 
+#[allow(dead_code)]
 pub fn has_atx_headings(s: &str) -> bool {
     s.lines().any(|l| {
         let t = l.trim_start();
