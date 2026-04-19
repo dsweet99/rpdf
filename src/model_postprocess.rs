@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use crate::model_dedup;
 use crate::model_pipe_table;
 use crate::model_postprocess_lines;
+use crate::model_postprocess_prose;
 use crate::model_report_headings;
 
 static COLON_THEN_NUMBERED: LazyLock<Regex> =
@@ -28,6 +29,9 @@ static NUMBER_HYPHEN_WORD_WRAP: LazyLock<Regex> = LazyLock::new(|| {
 });
 static LOWER_BEFORE_OPEN_PAREN_BREAK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"([a-z])\n(\()").expect("linebreak before open paren")
+});
+static WORD_WRAP_SPLIT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)\b([A-Za-z]{2,})\n([a-z]{2,}\b)").expect("word wrap split")
 });
 static SPACE_AROUND_LISTS_HEADING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"([a-z.!?]) ([A-Z][a-z]+ Lists) ([A-Z])").expect("space around titled list sections")
@@ -110,6 +114,7 @@ pub fn postprocess_extracted_markdown(s: &str) -> String {
     let s = model_postprocess_lines::move_trailing_numbered_markers_onto_previous_line(&s);
     let s = model_postprocess_lines::promote_plain_section_headings(&s);
     let s = unwrap_pdf_line_wraps(&s);
+    let s = model_postprocess_prose::join_pdf_wrapped_prose_lines(&s);
     let s = model_pipe_table::reflow_pipe_table_text(&s);
     let s = apply_heading_and_list_patterns(&s);
     let s = finalize_pipe_table_separators(&s);
@@ -232,6 +237,7 @@ fn unwrap_pdf_line_wraps(s: &str) -> String {
     s = LOWER_BEFORE_OPEN_PAREN_BREAK
         .replace_all(&s, "$1 $2")
         .into_owned();
+    s = WORD_WRAP_SPLIT.replace_all(&s, "$1$2").into_owned();
     s = WORD_BREAK_BEFORE_PIPE_CELL
         .replace_all(&s, "$1 $2")
         .into_owned();

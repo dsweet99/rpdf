@@ -9,6 +9,7 @@ mod model_dedup;
 mod model_pipe_table;
 mod model_report_headings;
 mod model_postprocess_lines;
+mod model_postprocess_prose;
 mod model_postprocess;
 mod model;
 mod pagespec;
