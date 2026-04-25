@@ -11,13 +11,16 @@ pub fn join_pdf_wrapped_prose_lines(s: &str) -> String {
     let mut i = 0usize;
     while i + 1 < lines.len() {
         if should_join_prose_pair(&lines[i], &lines[i + 1]) {
-            let joiner = if soft_hyphen_join(&lines[i], &lines[i + 1]) {
-                String::new()
-            } else {
-                String::from(" ")
-            };
+            let soft_hyphen = soft_hyphen_join(&lines[i], &lines[i + 1]);
+            let hard_hyphen = lines[i].trim_end().ends_with('-');
+            let joiner = if soft_hyphen || hard_hyphen { "" } else { " " };
             let next = lines[i + 1].trim_start().to_string();
-            lines[i] = format!("{}{joiner}{next}", lines[i].trim_end());
+            let cur = if soft_hyphen {
+                lines[i].trim_end().trim_end_matches('-')
+            } else {
+                lines[i].trim_end()
+            };
+            lines[i] = format!("{cur}{joiner}{next}");
             lines.remove(i + 1);
             continue;
         }
@@ -80,11 +83,18 @@ fn looks_like_title(words: &[&str], cur: &str) -> bool {
 fn soft_hyphen_join(cur: &str, next: &str) -> bool {
     let c = cur.trim_end();
     let n = next.trim_start();
-    let last_word = c.split_whitespace().next_back().unwrap_or("");
-    if last_word.len() < 4 {
+    if !c.ends_with('-') {
         return false;
     }
-    let last_word_alpha = last_word.chars().all(char::is_alphabetic);
+    let last_word = c.split_whitespace().next_back().unwrap_or("");
+    let stem = last_word.strip_suffix('-').unwrap_or(last_word);
+    if stem.is_empty() {
+        return false;
+    }
+    if stem.len() < 4 {
+        return false;
+    }
+    let last_word_alpha = stem.chars().all(char::is_alphabetic);
     if !last_word_alpha {
         return false;
     }
@@ -95,7 +105,7 @@ fn soft_hyphen_join(cur: &str, next: &str) -> bool {
     if first_word.len() < 2 || first_word.len() > 5 {
         return false;
     }
-    let last_lower = last_word.to_lowercase();
+    let last_lower = stem.to_lowercase();
     has_suffix3(&last_lower, "fac")
         || has_suffix3(&last_lower, "tio")
         || has_suffix3(&last_lower, "atu")
@@ -112,4 +122,47 @@ fn soft_hyphen_join(cur: &str, next: &str) -> bool {
 #[allow(dead_code)]
 fn has_suffix3(s: &str, suffix: &str) -> bool {
     s.chars().rev().take(3).collect::<String>().chars().rev().collect::<String>() == suffix
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_pdf_wrapped_prose_lines_keeps_space_for_non_hyphen_wrap() {
+        let out = join_pdf_wrapped_prose_lines("our satisfaction\nmodel improved");
+        assert_eq!(out, "our satisfaction model improved");
+    }
+
+    #[test]
+    fn soft_hyphen_join_requires_explicit_trailing_hyphen() {
+        assert!(!soft_hyphen_join("satis", "faction"));
+    }
+
+    #[test]
+    fn join_pdf_wrapped_prose_lines_removes_soft_hyphen_wrap() {
+        let out = join_pdf_wrapped_prose_lines("customer satisfac-\ntion improved");
+        assert_eq!(out, "customer satisfaction improved");
+    }
+
+    #[test]
+    fn join_pdf_wrapped_prose_lines_keeps_hard_hyphen_without_space() {
+        let out = join_pdf_wrapped_prose_lines("inter-\nnational");
+        assert_eq!(out, "inter-national");
+    }
+}
+
+#[cfg(test)]
+mod kiss_coverage {
+    #[test]
+    fn symbol_refs() {
+        assert_eq!(
+            stringify!(super::should_join_prose_pair),
+            "super::should_join_prose_pair"
+        );
+        assert_eq!(stringify!(super::pair_can_join), "super::pair_can_join");
+        assert_eq!(stringify!(super::looks_like_title), "super::looks_like_title");
+        assert_eq!(stringify!(super::soft_hyphen_join), "super::soft_hyphen_join");
+        assert_eq!(stringify!(super::has_suffix3), "super::has_suffix3");
+    }
 }

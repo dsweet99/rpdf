@@ -17,10 +17,7 @@ static COLON_THEN_BULLET: LazyLock<Regex> =
 static INLINE_BULLET_AFTER_ALNUM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([a-z0-9])[ \t]+•\s*").expect("inline bullet after alnum"));
 static TITLE_WORD_PAIR: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?m)(^|[^A-Za-z])([a-z]{3,})\s+([A-Z][a-z]{5,} [A-Z][a-z]{5,})",
-    )
-    .expect("two title-case words")
+    Regex::new(r"(?m)^([a-z]{3,})\s+([A-Z][a-z]{5,} [A-Z][a-z]{5,})").expect("two title-case words")
 });
 static HYPHEN_SOFT_BREAK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-\n([a-z])").expect("hyphen syllable break"));
@@ -83,7 +80,7 @@ static BULLET_ITEM_INLINE_NEXT_BULLET: LazyLock<Regex> = LazyLock::new(|| {
         .expect("bullet bullet inline next")
 });
 static HEADING_GLUED_DASH_LIST: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^(#{1,6}\s+\S[^\n-]*?)\s+(-\s+\S)").expect("heading glued dash list")
+    Regex::new(r"(?m)^(#{1,6}\s+\S[^\n-]*?)\s+(-\s+\S[^\n]*\s-\s+\S)").expect("heading glued dash list")
 });
 static HEADING_GLUED_PROSE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^(#{1,6}\s+\S+(?:\s+\S+){0,2})\s+(The|This|These|Those|It|An|A|Our|We|If|When|Where|Each|Every|Most|Some|Many|All|However|Therefore|Thus|For|In|On|At|While|Demographic|Full-width)\s")
@@ -119,8 +116,7 @@ pub fn postprocess_extracted_markdown(s: &str) -> String {
     let s = apply_heading_and_list_patterns(&s);
     let s = finalize_pipe_table_separators(&s);
     let s = model_postprocess_lines::join_list_item_continuations(&s);
-    let s = model_postprocess_lines::ensure_blank_line_before_atx_headings(&s);
-    apply_heading_and_list_patterns(&s)
+    model_postprocess_lines::ensure_blank_line_before_atx_headings(&s)
 }
 
 fn merge_wrapped_title_lines_once(s: &str) -> String {
@@ -221,10 +217,6 @@ fn join_hash_heading_lowercase_continuation(s: &str) -> String {
 fn unwrap_pdf_line_wraps(s: &str) -> String {
     let mut s = s.replace("\r\n", "\n").replace('\r', "\n");
     s = s.replace(" #\n", "\n# ");
-    s = s.replace(
-        "Validate ground truth 1\n",
-        "Validate ground truth\n1\n\n",
-    );
     s = GLUED_PDF_CONVERSION_FOOTER_DIGIT
         .replace_all(&s, " in PDF conversion.\n$1")
         .into_owned();
@@ -237,7 +229,7 @@ fn unwrap_pdf_line_wraps(s: &str) -> String {
     s = LOWER_BEFORE_OPEN_PAREN_BREAK
         .replace_all(&s, "$1 $2")
         .into_owned();
-    s = WORD_WRAP_SPLIT.replace_all(&s, "$1$2").into_owned();
+    s = WORD_WRAP_SPLIT.replace_all(&s, "$1 $2").into_owned();
     s = WORD_BREAK_BEFORE_PIPE_CELL
         .replace_all(&s, "$1 $2")
         .into_owned();
@@ -289,6 +281,10 @@ fn split_heading_inline_dash_list(s: &str) -> String {
         if let Some(caps) = HEADING_INLINE_DASH_LIST.captures(t) {
             let heading = caps.get(1).map_or("", |m| m.as_str());
             let rest = caps.get(2).map_or("", |m| m.as_str());
+            if !rest.contains(" - ") {
+                out.push(line.to_string());
+                continue;
+            }
             out.push(heading.to_string());
             for item in split_dash_separated_bullet_items(rest) {
                 out.push(format!("- {item}"));
@@ -316,8 +312,6 @@ fn apply_heading_and_list_patterns(s: &str) -> String {
         .replace_all(&s, "$1\n$2\n$3")
         .into_owned();
     let mut s = DOT_HASH_NL.replace_all(&s, ".\n# $1").into_owned();
-    s = s.replace(" # ", "\n# ");
-    s = s.replace(" ## ", "\n## ");
     s = HEADING_GLUED_NUMBERED_ITEM.replace_all(&s, "$1\n$2").into_owned();
     s = HEADING_GLUED_CITATION.replace_all(&s, "$1\n$2").into_owned();
     s = HEADING_GLUED_PIPE_ROW.replace_all(&s, "$1\n$2").into_owned();
@@ -355,10 +349,9 @@ fn apply_heading_and_list_patterns(s: &str) -> String {
     s = TITLE_WORD_PAIR
         .replace_all(&s, |caps: &regex::Captures<'_>| {
             format!(
-                "{}{}\n{}",
+                "{}\n{}",
                 caps.get(1).map_or("", |m| m.as_str()),
-                caps.get(2).map_or("", |m| m.as_str()),
-                caps.get(3).map_or("", |m| m.as_str())
+                caps.get(2).map_or("", |m| m.as_str())
             )
         })
         .into_owned();
@@ -384,9 +377,21 @@ fn finalize_pipe_table_separators(s: &str) -> String {
 
 fn trim_trailing_page_number_line(s: &mut String) {
     if let Some(pos) = s.rfind('\n') {
-        if &s[pos + 1..] == "1" {
+        let prev = s[..pos].rsplit('\n').next().map_or("", str::trim);
+        let footer_like_label = prev.chars().all(|c| c.is_ascii_alphabetic());
+        let known_footer_label = prev.eq_ignore_ascii_case("line") || prev.eq_ignore_ascii_case("page");
+        if &s[pos + 1..] == "1"
+            && !prev.is_empty()
+            && !prev.contains(' ')
+            && footer_like_label
+            && known_footer_label
+            && prev.len() >= 3
+            && prev.len() <= 6
+        {
             s.truncate(pos);
         }
     }
 }
+
+
 

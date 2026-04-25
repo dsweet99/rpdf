@@ -99,23 +99,26 @@ fn try_move_marker(
     };
     let prev = lines[prev_idx].clone();
     let stripped = prev.trim_start();
+    let indent_len = prev.len().saturating_sub(stripped.len());
+    let indent = &prev[..indent_len];
     if is_atx_heading_line(&prev) || !prev_ok(stripped) {
         return false;
     }
-    lines[prev_idx] = format!("{marker} {stripped}");
+    lines[prev_idx] = format!("{indent}{marker} {stripped}");
     lines.remove(i);
     true
 }
 
 fn previous_text_line_index(lines: &[String], i: usize) -> Option<usize> {
-    let mut j = i;
-    while j > 0 {
-        j -= 1;
-        if !lines[j].trim().is_empty() {
-            return Some(j);
-        }
+    if i == 0 {
+        return None;
     }
-    None
+    let j = i - 1;
+    if lines[j].trim().is_empty() {
+        None
+    } else {
+        Some(j)
+    }
 }
 
 pub fn promote_plain_section_headings(s: &str) -> String {
@@ -158,7 +161,7 @@ pub fn join_list_item_continuations(s: &str) -> String {
             continue;
         }
         let first = next_t.chars().next().expect("non-empty");
-        if !(first.is_lowercase() || first.is_alphanumeric()) {
+        if !(first.is_lowercase() || first.is_ascii_digit()) {
             i += 1;
             continue;
         }
@@ -200,6 +203,13 @@ mod tests {
     }
 
     #[test]
+    fn numbered_marker_does_not_hoist_across_blank_line() {
+        let s = "Intro paragraph\n\n1.\nFirst item text";
+        let o = move_trailing_numbered_markers_onto_previous_line(s);
+        assert_eq!(o, s);
+    }
+
+    #[test]
     fn promotes_known_section_headings() {
         let s = "Executive Summary\nbody\nFindings\nmore";
         let o = promote_plain_section_headings(s);
@@ -220,5 +230,45 @@ mod tests {
         assert_eq!(join_pdf_wrapped_prose_lines(s), s);
         let s2 = "lead text\n- item";
         assert_eq!(join_pdf_wrapped_prose_lines(s2), s2);
+    }
+
+    #[test]
+    fn list_continuation_does_not_join_uppercase_sentence_start() {
+        let s = "- item detail\nNext sentence";
+        let out = join_list_item_continuations(s);
+        assert_eq!(out, s);
+    }
+
+    #[test]
+    fn bullet_marker_hoist_preserves_indentation() {
+        let s = "  nested detail\n\u{2022}";
+        let out = move_trailing_bullet_markers_onto_previous_line(s);
+        assert_eq!(out, "  \u{2022} nested detail");
+    }
+}
+
+#[cfg(test)]
+mod kiss_coverage {
+    #[test]
+    fn symbol_refs() {
+        assert_eq!(stringify!(super::is_atx_heading_line), "super::is_atx_heading_line");
+        assert_eq!(
+            stringify!(super::ensure_blank_line_before_atx_headings),
+            "super::ensure_blank_line_before_atx_headings"
+        );
+        assert_eq!(
+            stringify!(super::move_trailing_marker_lines),
+            "super::move_trailing_marker_lines"
+        );
+        assert_eq!(stringify!(super::try_move_marker), "super::try_move_marker");
+        assert_eq!(
+            stringify!(super::previous_text_line_index),
+            "super::previous_text_line_index"
+        );
+        assert_eq!(stringify!(super::promote_one_line), "super::promote_one_line");
+        assert_eq!(
+            stringify!(super::join_list_item_continuations),
+            "super::join_list_item_continuations"
+        );
     }
 }

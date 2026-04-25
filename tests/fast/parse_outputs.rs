@@ -128,6 +128,7 @@ fn parse_refuses_to_overwrite_existing_json_sidecar() {
         .expect("spawn");
     assert_eq!(status.code(), Some(2));
     assert_eq!(fs::read_to_string(&json_out).expect("read json"), "{}\n");
+    assert!(!md.exists());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -151,6 +152,61 @@ fn parse_refuses_to_overwrite_existing_debug_json_sidecar() {
         .expect("spawn");
     assert_eq!(status.code(), Some(2));
     assert_eq!(fs::read_to_string(&dbg).expect("read dbg"), "{}\n");
+    assert!(!md.exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_rolls_back_json_when_debug_json_write_fails() {
+    let sample = common::sample_pdf();
+    let dir = std::env::temp_dir().join(format!(
+        "rpdf_json_rollback_dbg_fail_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let out = dir.join("out.md");
+    let json = dir.join("out.json");
+    let missing_parent = dir.join("missing");
+    let debug_json = missing_parent.join("out.debug.json");
+    let status = Command::new(common::exe())
+        .arg("parse")
+        .arg("--output")
+        .arg(&out)
+        .arg("--json")
+        .arg(&json)
+        .arg("--debug-json")
+        .arg(&debug_json)
+        .arg(&sample)
+        .status()
+        .expect("spawn");
+    assert_eq!(status.code(), Some(2));
+    assert!(!out.exists());
+    assert!(!json.exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_rejects_mixed_non_pdf_file_operand() {
+    let sample = common::sample_pdf();
+    let dir = std::env::temp_dir().join(format!("rpdf_mixed_nonpdf_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let pdf = dir.join("ok.pdf");
+    fs::copy(&sample, &pdf).expect("copy pdf");
+    let txt = dir.join("note.txt");
+    fs::write(&txt, b"not pdf").expect("write txt");
+    let out = dir.join("out.md");
+    let status = Command::new(common::exe())
+        .arg("parse")
+        .arg("--output")
+        .arg(&out)
+        .arg(&pdf)
+        .arg(&txt)
+        .status()
+        .expect("spawn");
+    assert_eq!(status.code(), Some(1));
+    assert!(!out.exists());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -228,5 +284,52 @@ fn batch_creates_output_dir_when_absent() {
     assert!(status.success());
     assert!(out.join("solo.md").is_file());
     assert!(out.join("twin.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_single_input_with_output_dir_writes_stem_markdown() {
+    let sample = common::sample_pdf();
+    let dir = std::env::temp_dir().join(format!("rpdf_single_outdir_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let pdf = dir.join("solo.pdf");
+    fs::copy(&sample, &pdf).expect("copy");
+    let out = dir.join("out");
+    let status = Command::new(common::exe())
+        .arg("parse")
+        .arg("--output-dir")
+        .arg(&out)
+        .arg(&pdf)
+        .status()
+        .expect("spawn");
+    assert!(status.success());
+    assert!(out.join("solo.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_single_input_output_dir_markdown_overwrite_returns_one() {
+    let sample = common::sample_pdf();
+    let dir = std::env::temp_dir().join(format!("rpdf_single_outdir_noclobber_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let pdf = dir.join("solo.pdf");
+    fs::copy(&sample, &pdf).expect("copy");
+    let out = dir.join("out");
+    fs::create_dir_all(&out).expect("mkdir out");
+    fs::write(out.join("solo.md"), b"blocker\n").expect("seed md");
+    let status = Command::new(common::exe())
+        .arg("parse")
+        .arg("--output-dir")
+        .arg(&out)
+        .arg(&pdf)
+        .status()
+        .expect("spawn");
+    assert_eq!(status.code(), Some(1));
+    assert_eq!(
+        fs::read_to_string(out.join("solo.md")).expect("read md"),
+        "blocker\n"
+    );
     let _ = fs::remove_dir_all(&dir);
 }

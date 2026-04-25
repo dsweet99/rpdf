@@ -1,4 +1,6 @@
-pub fn parse_pageset(spec: &str) -> Result<std::collections::BTreeSet<u16>, String> {
+const MAX_EXPANDED_PAGE_RANGE: u32 = 100_000;
+
+pub fn parse_pageset(spec: &str) -> Result<std::collections::BTreeSet<u32>, String> {
     let mut out = std::collections::BTreeSet::new();
     for raw in spec.split(',') {
         let p = raw.trim();
@@ -6,11 +8,11 @@ pub fn parse_pageset(spec: &str) -> Result<std::collections::BTreeSet<u16>, Stri
             continue;
         }
         if let Some((a, b)) = p.split_once('-') {
-            let start: u16 = a
+            let start: u32 = a
                 .trim()
                 .parse()
                 .map_err(|_| format!("invalid page range fragment {p:?}"))?;
-            let end: u16 = b
+            let end: u32 = b
                 .trim()
                 .parse()
                 .map_err(|_| format!("invalid page range fragment {p:?}"))?;
@@ -20,11 +22,14 @@ pub fn parse_pageset(spec: &str) -> Result<std::collections::BTreeSet<u16>, Stri
             if start > end {
                 return Err(format!("invalid page range {p:?}"));
             }
+            if end - start + 1 > MAX_EXPANDED_PAGE_RANGE {
+                return Err(format!("page range too large {p:?}"));
+            }
             for n in start..=end {
                 out.insert(n);
             }
         } else {
-            let n: u16 = p
+            let n: u32 = p
                 .parse()
                 .map_err(|_| format!("invalid page token {p:?}"))?;
             if n == 0 {
@@ -56,5 +61,11 @@ mod tests {
     #[test]
     fn parse_pageset_rejects_descending_range() {
         assert!(parse_pageset("3-1").is_err());
+    }
+
+    #[test]
+    fn parse_pageset_rejects_excessive_range_size() {
+        let err = parse_pageset("1-100001").expect_err("must reject huge range");
+        assert!(err.contains("page range too large"), "{err}");
     }
 }

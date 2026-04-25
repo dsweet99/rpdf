@@ -5,7 +5,8 @@ use crate::markdown;
 use crate::model::{self, DocumentJson, Element, PageOut, ParseConfig, RunStatus};
 use pdfium_render::prelude::*;
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 
 const SCHEMA: &str = "1.0";
@@ -97,7 +98,7 @@ fn raw_page_text(t: &PdfPageText<'_>, page_width: f32, cfg: &ParseConfig) -> Str
     if cfg.reading_order == "off" {
         return t.all();
     }
-    if cfg.reading_order == "segments" || cfg.reading_order == "basic" {
+    if cfg.reading_order == "basic" {
         return extract_text_segment_reading_order(t, page_width);
     }
     t.all()
@@ -105,7 +106,7 @@ fn raw_page_text(t: &PdfPageText<'_>, page_width: f32, cfg: &ParseConfig) -> Str
 
 fn extract_page_outputs(
     doc: &PdfDocument<'_>,
-    filter: Option<&BTreeSet<u16>>,
+    filter: Option<&BTreeSet<u32>>,
     cfg: &ParseConfig,
 ) -> (Vec<PageOut>, Vec<u32>) {
     let mut pages_out = Vec::new();
@@ -113,7 +114,7 @@ fn extract_page_outputs(
     for (idx, page) in doc.pages().iter().enumerate() {
         let page_num = (idx + 1) as u32;
         if let Some(set) = filter {
-            if !set.contains(&(page_num as u16)) {
+            if !set.contains(&page_num) {
                 continue;
             }
         }
@@ -148,14 +149,14 @@ fn extract_page_outputs(
 }
 
 fn merge_filter_out_of_range_requests(
-    filter: Option<&BTreeSet<u16>>,
+    filter: Option<&BTreeSet<u32>>,
     page_count: u32,
     warnings: &mut Vec<String>,
     failed_pages: &mut Vec<u32>,
 ) {
     if let Some(set) = filter {
         for p in set {
-            let n = u32::from(*p);
+            let n = *p;
             if n == 0 || n > page_count {
                 warnings.push(format!("requested page {n} is out of range ({page_count} pages)"));
                 failed_pages.push(n);
@@ -189,7 +190,7 @@ fn paragraph_bbox_union(t: &PdfPageText, page_width: f32, page_height: f32) -> [
 pub fn build_document_json(
     doc: &PdfDocument<'_>,
     input: &Path,
-    filter: Option<&BTreeSet<u16>>,
+    filter: Option<&BTreeSet<u32>>,
     cfg: ParseConfig,
     quiet: bool,
 ) -> (DocumentJson, String) {
@@ -226,12 +227,20 @@ pub fn write_exclusive(
     path: &Path,
     write: impl FnOnce(&mut Vec<u8>) -> Result<(), String>,
 ) -> Result<(), String> {
-    if path.exists() {
-        return Err(format!("refusing to overwrite {}", path.display()));
-    }
     let mut buf = Vec::new();
     write(&mut buf)?;
-    fs::write(path, buf).map_err(|e| e.to_string())
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                format!("refusing to overwrite {}", path.display())
+            } else {
+                e.to_string()
+            }
+        })?;
+    file.write_all(&buf).map_err(|e| e.to_string())
 }
 
 pub fn write_json_document(path: &Path, dj: &DocumentJson) -> Result<(), String> {
@@ -256,7 +265,6 @@ mod tests_stub {
         append_stub_config_warnings(&cfg, &mut w, true);
         assert!(!w.iter().any(|s| s.contains("reading-order")));
     }
-
     #[test]
     fn xycut_reading_order_warns() {
         let mut w = Vec::new();
@@ -270,7 +278,6 @@ mod tests_stub {
         append_stub_config_warnings(&cfg, &mut w, true);
         assert!(w.iter().any(|s| s.contains("reading-order")));
     }
-
     #[test]
     fn nondefault_table_mode_warns() {
         let mut w = Vec::new();
@@ -284,7 +291,6 @@ mod tests_stub {
         append_stub_config_warnings(&cfg, &mut w, true);
         assert!(w.iter().any(|s| s.contains("table")));
     }
-
     #[test]
     fn include_header_footer_warns() {
         let mut w = Vec::new();
@@ -325,7 +331,7 @@ mod merge_and_exclusive_tests {
         let mut warnings = Vec::new();
         let mut failed_pages = Vec::new();
         let mut set = BTreeSet::new();
-        set.insert(9_u16);
+        set.insert(9_u32);
         merge_filter_out_of_range_requests(Some(&set), 1, &mut warnings, &mut failed_pages);
         assert!(warnings.iter().any(|w| w.contains("out of range")));
         assert!(failed_pages.contains(&9));
@@ -378,6 +384,27 @@ mod kiss_coverage {
             "super::build_document_json"
         );
         assert_eq!(stringify!(super::write_exclusive), "super::write_exclusive");
+        assert_eq!(
+            stringify!(super::push_initial_warnings),
+            "super::push_initial_warnings"
+        );
+        assert_eq!(
+            stringify!(super::extract_text_segment_reading_order),
+            "super::extract_text_segment_reading_order"
+        );
+        assert_eq!(stringify!(super::raw_page_text), "super::raw_page_text");
+        assert_eq!(
+            stringify!(super::extract_page_outputs),
+            "super::extract_page_outputs"
+        );
+        assert_eq!(
+            stringify!(super::paragraph_bbox_union),
+            "super::paragraph_bbox_union"
+        );
+        assert_eq!(
+            stringify!(super::write_json_document),
+            "super::write_json_document"
+        );
         let _: fn(bool, RunStatus, &[u32]) = super::eprint_partial_success;
     }
 }

@@ -28,13 +28,26 @@ Usage
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
 
 import yaml
 
-DEFAULT_BENCH_DIR = Path("/home/dsweet/Projects/pdfs/pdf-parser-benchmark")
+
+def _default_bench_dir() -> Path:
+    env = os.environ.get("PDF_PARSER_BENCHMARK_DIR", "").strip()
+    if env:
+        return Path(env)
+    root = Path(__file__).resolve().parents[1]
+    sibling = root.parent / "pdf-parser-benchmark"
+    if sibling.is_dir():
+        return sibling
+    return root / "pdf-parser-benchmark"
+
+
+DEFAULT_BENCH_DIR = _default_bench_dir()
 
 
 def _emit_yaml(meta_path: Path, payload: dict) -> None:
@@ -81,23 +94,31 @@ def _convert_arxiv(bench_dir: Path) -> int:
 
 
 def _build_arxiv_ground_truth(bench_dir: Path) -> tuple[int, int]:
-    """Returns (succeeded, total). Returns (0, 0) if not runnable."""
+    """Returns (succeeded, total). Raises RuntimeError on setup failures."""
     ar5iv_dir = bench_dir / "corpus" / "academic" / "arxiv" / "ar5iv"
     if not ar5iv_dir.is_dir():
+        return (0, 0)
+    if not any(ar5iv_dir.glob("*.html")):
         return (0, 0)
     if shutil.which("pandoc") is None:
         print("  pandoc not found on PATH; skipping arxiv ground-truth generation",
               file=sys.stderr)
         return (0, 0)
+    old_path = list(sys.path)
     sys.path.insert(0, str(bench_dir))
     try:
         from builders.ar5iv_to_markdown import convert_all_arxiv_samples
+        output_dir = bench_dir / "corpus" / "academic" / "arxiv" / "ground_truth"
+        results = convert_all_arxiv_samples(sample_dir=ar5iv_dir, output_dir=output_dir)
     except Exception as exc:
-        print(f"  failed to import ar5iv_to_markdown: {exc}", file=sys.stderr)
-        return (0, 0)
-    output_dir = bench_dir / "corpus" / "academic" / "arxiv" / "ground_truth"
-    results = convert_all_arxiv_samples(sample_dir=ar5iv_dir, output_dir=output_dir)
-    ok = sum(1 for r in results.values() if r["success"])
+        raise RuntimeError(f"arxiv conversion failed: {exc}") from exc
+    finally:
+        sys.path[:] = old_path
+    ok = sum(
+        1
+        for r in results.values()
+        if isinstance(r, dict) and bool(r.get("success"))
+    )
     return (ok, len(results))
 
 
@@ -142,7 +163,10 @@ def main() -> None:
 
     if not args.skip_arxiv_gt:
         print("\ngenerating arxiv ground-truth markdown via pandoc + ar5iv...")
-        ok, total = _build_arxiv_ground_truth(bench_dir)
+        try:
+            ok, total = _build_arxiv_ground_truth(bench_dir)
+        except RuntimeError as exc:
+            sys.exit(str(exc))
         if total:
             print(f"  arxiv ground truth: {ok}/{total} markdown files written")
         else:

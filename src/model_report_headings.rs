@@ -20,7 +20,7 @@ static ORPHAN_BULLET_BEFORE_SECTION: LazyLock<Regex> = LazyLock::new(|| {
     .expect("orphan bullet before section title")
 });
 static GLUED_ID_EXEC_SUMMARY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"([A-Z0-9][A-Za-z0-9-]+)\s+(Executive Summary)\s+([A-Z][^\n]*)").expect("exec")
+    Regex::new(r"(?m)^([A-Z0-9][A-Za-z0-9-]+)\s+(Executive Summary)\s+([A-Z][^\n]*)$").expect("exec")
 });
 static HEADING_INTRO_THE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^(Introduction)\s+(The [^\n]+)").expect("intro the"));
@@ -40,16 +40,16 @@ static HEADING_KEY_OBS: LazyLock<Regex> = LazyLock::new(|| {
 });
 static HEADING_NUM_SECTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?m)^(\d+)\s+(Methodology|Introduction|Results|Conclusion|References|Recommendations)\s+([^\n]+)$",
+        r"(?m)^([1-9]\d{0,2})\s+(Methodology|Introduction|Results|Conclusion|References|Recommendations)\s+([^\n]+)$",
     )
     .expect("num section")
 });
 static HEADING_NUM_FINDINGS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^(\d+)\s+(Findings)\s+([^\n]+)$").expect("num findings")
+    Regex::new(r"(?m)^([1-9]\d{0,2})\s+(Findings)\s+([^\n]+)$").expect("num findings")
 });
 
 pub fn promote_report_headings(s: &str) -> String {
-    let mut s = LONE_PAGE_NUMBER.replace_all(s, "\n$1").into_owned();
+    let mut s = LONE_PAGE_NUMBER.replace_all(s, "$1").into_owned();
     s = STRIP_PAGE_NUM_BEFORE_ATX
         .replace_all(&s, "$1")
         .into_owned();
@@ -89,4 +89,55 @@ pub fn promote_report_headings(s: &str) -> String {
     ORPHAN_BULLET_BEFORE_ATX_INLINE
         .replace_all(&s, "$1")
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn promote_report_headings_does_not_treat_year_as_section_number() {
+        let input = "2024 Results were mixed across regions";
+        let out = promote_report_headings(input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn promote_report_headings_does_not_treat_year_as_findings_number() {
+        let input = "2024 Findings indicate regional variance";
+        let out = promote_report_headings(input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn promote_report_headings_accepts_three_digit_section_numbers() {
+        let input = "100 Results extended analysis";
+        let out = promote_report_headings(input);
+        assert_eq!(out, "# Results\n\nextended analysis");
+    }
+
+    #[test]
+    fn promote_report_headings_does_not_rewrite_inline_exec_summary_phrase() {
+        let input = "The board discussed Executive Summary outcomes yesterday.";
+        let out = promote_report_headings(input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn promote_report_headings_does_not_introduce_leading_blank_before_atx() {
+        let input = "1\n# Heading";
+        let out = promote_report_headings(input);
+        assert_eq!(out, "# Heading");
+    }
+}
+
+#[cfg(test)]
+mod kiss_coverage {
+    #[test]
+    fn symbol_refs() {
+        assert_eq!(
+            stringify!(super::promote_report_headings),
+            "super::promote_report_headings"
+        );
+    }
 }

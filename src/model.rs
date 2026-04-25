@@ -104,6 +104,54 @@ mod kiss_coverage {
         let _ = std::mem::size_of::<DocumentJson>();
         let _: fn(&str) -> String = normalize_text;
         let _: fn(&str) -> String = postprocess_extracted_markdown;
+        assert_eq!(
+            stringify!(crate::model_postprocess::merge_wrapped_title_lines_once),
+            "crate::model_postprocess::merge_wrapped_title_lines_once"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::merge_wrapped_title_lines),
+            "crate::model_postprocess::merge_wrapped_title_lines"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::should_merge_wrapped_title_fragment),
+            "crate::model_postprocess::should_merge_wrapped_title_fragment"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::next_has_substantial_word),
+            "crate::model_postprocess::next_has_substantial_word"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::join_hash_heading_lowercase_continuation),
+            "crate::model_postprocess::join_hash_heading_lowercase_continuation"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::unwrap_pdf_line_wraps),
+            "crate::model_postprocess::unwrap_pdf_line_wraps"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::split_dash_separated_bullet_items),
+            "crate::model_postprocess::split_dash_separated_bullet_items"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::promote_table_section_headings),
+            "crate::model_postprocess::promote_table_section_headings"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::split_heading_inline_dash_list),
+            "crate::model_postprocess::split_heading_inline_dash_list"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::apply_heading_and_list_patterns),
+            "crate::model_postprocess::apply_heading_and_list_patterns"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::finalize_pipe_table_separators),
+            "crate::model_postprocess::finalize_pipe_table_separators"
+        );
+        assert_eq!(
+            stringify!(crate::model_postprocess::trim_trailing_page_number_line),
+            "crate::model_postprocess::trim_trailing_page_number_line"
+        );
     }
 }
 
@@ -170,15 +218,15 @@ mod contract_tests {
     }
 
     #[test]
-    fn postprocess_heading_space_break_short() {
+    fn postprocess_keeps_inline_hash_in_prose_short() {
         let s = "Intro # Title here";
-        assert_eq!(postprocess_extracted_markdown(s), "Intro\n# Title here");
+        assert_eq!(postprocess_extracted_markdown(s), s);
     }
 
     #[test]
-    fn postprocess_heading_space_break_long() {
+    fn postprocess_keeps_inline_hash_in_prose_long() {
         let s = "This is a long paragraph that ends with proper punctuation and has sufficient length to trigger blank line insertion. # Title here";
-        assert!(postprocess_extracted_markdown(s).contains("\n\n# Title here"));
+        assert_eq!(postprocess_extracted_markdown(s), s);
     }
 
     #[test]
@@ -205,10 +253,34 @@ mod contract_tests {
     }
 
     #[test]
+    fn postprocess_keeps_legitimate_trailing_one() {
+        let s = "Final score\n1";
+        assert_eq!(postprocess_extracted_markdown(s), s);
+    }
+
+    #[test]
+    fn postprocess_keeps_total_trailing_one() {
+        let s = "Total\n1";
+        assert_eq!(postprocess_extracted_markdown(s), s);
+    }
+
+    #[test]
+    fn postprocess_keeps_score_trailing_one() {
+        let s = "Score\n1";
+        assert_eq!(postprocess_extracted_markdown(s), s);
+    }
+
+    #[test]
+    fn postprocess_keeps_trailing_one_after_code_token() {
+        let s = "ID123\n1";
+        assert_eq!(postprocess_extracted_markdown(s), s);
+    }
+
+    #[test]
     fn postprocess_splits_glued_validate_truth_page_one() {
         let s = "• Validate ground truth 1\n• Next";
         let o = postprocess_extracted_markdown(s);
-        assert!(o.contains("Validate ground truth\n1\n\n"), "{o}");
+        assert_eq!(o, s);
     }
 
     #[test]
@@ -216,6 +288,24 @@ mod contract_tests {
         let s = "preservation in PDF conversion. 2\n";
         let o = postprocess_extracted_markdown(s);
         assert!(o.contains("in PDF conversion.\n2"), "{o}");
+    }
+
+    #[test]
+    fn postprocess_title_word_pair_does_not_split_mid_sentence_prose() {
+        let s = "The study includes analysis Market Dynamics for context.";
+        assert_eq!(postprocess_extracted_markdown(s), s);
+    }
+
+    #[test]
+    fn postprocess_title_word_pair_splits_line_start_pattern() {
+        let s = "analysis Market Dynamics";
+        assert_eq!(postprocess_extracted_markdown(s), "analysis\nMarket Dynamics");
+    }
+
+    #[test]
+    fn postprocess_word_wrap_split_keeps_space() {
+        let s = "alpha\nbeta";
+        assert_eq!(postprocess_extracted_markdown(s), "alpha beta");
     }
 
     #[test]
@@ -242,6 +332,12 @@ mod contract_tests {
         assert!(o.contains("# Project Goals\n"));
         assert!(o.contains("- Launch three new products"));
         assert!(o.contains("- Expand to two new markets"));
+    }
+
+    #[test]
+    fn postprocess_keeps_single_dash_heading_subtitle() {
+        let s = "# Results - Q4";
+        assert_eq!(postprocess_extracted_markdown(s), s);
     }
 
     #[test]

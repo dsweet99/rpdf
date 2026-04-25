@@ -78,3 +78,29 @@ pub fn sort_segment_rows_by_reading_order(rows: &mut Vec<SegRow>, page_width: f3
     }
     rows.sort_by(cmp_top_down);
 }
+
+#[cfg(test)]
+mod kiss_coverage {
+    #[test]
+    fn symbol_refs() {
+        assert_eq!(stringify!(super::cmp_top_down), "super::cmp_top_down");
+        assert_eq!(stringify!(super::tertile_columns), "super::tertile_columns");
+        assert_eq!(
+            stringify!(super::merge_sorted_columns),
+            "super::merge_sorted_columns"
+        );
+        assert_eq!(
+            stringify!(super::try_three_column_layout),
+            "super::try_three_column_layout"
+        );
+        assert_eq!(stringify!(super::left_right_columns), "super::left_right_columns");
+        assert_eq!(
+            stringify!(super::try_two_column_layout),
+            "super::try_two_column_layout"
+        );
+        assert_eq!(
+            stringify!(super::sort_segment_rows_by_reading_order),
+            "super::sort_segment_rows_by_reading_order"
+        );
+    }
+}

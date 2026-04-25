@@ -16,6 +16,7 @@ mod pagespec;
 mod parse_batch;
 mod parse_cmd;
 mod parse_document;
+mod parse_overwrite;
 mod parse_validate;
 mod reading_order;
 mod render_cmd;

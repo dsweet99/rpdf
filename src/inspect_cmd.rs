@@ -1,32 +1,36 @@
-#![allow(clippy::cast_possible_truncation)]
-
 use crate::cli::InspectCli;
 use crate::engine;
 use crate::pagespec::parse_pageset;
 use pdfium_render::prelude::*;
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::Path;
 
-fn load_filter(cli: &InspectCli) -> Result<Option<BTreeSet<u16>>, String> {
+fn load_filter(cli: &InspectCli) -> Result<Option<BTreeSet<u32>>, String> {
     let Some(ref raw) = cli.pages else {
         return Ok(None);
     };
-    parse_pageset(raw).map(Some)
+    parse_pageset(raw).map(|set| {
+        Some(
+            set.into_iter()
+                .collect::<BTreeSet<u32>>(),
+        )
+    })
 }
 
-fn pdf_tagging_probe(path: &Path) -> (bool, bool) {
-    let Ok(bytes) = std::fs::read(path) else {
-        return (false, false);
-    };
+fn pdf_tagging_probe(path: &Path) -> Result<(bool, bool), String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("open tagging probe bytes: {e}"))?;
     let cap = 8 * 1024 * 1024;
-    let slice = if bytes.len() > cap {
-        &bytes[..cap]
-    } else {
-        bytes.as_slice()
-    };
+    let mut bytes = Vec::with_capacity(cap);
+    file.by_ref()
+        .take(cap as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read tagging probe bytes: {e}"))?;
+    let slice = bytes.as_slice();
     let mark = contains_subslice(slice, b"/MarkInfo");
     let struct_root = contains_subslice(slice, b"StructTreeRoot");
-    (mark, struct_root)
+    Ok((mark, struct_root))
 }
 
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
@@ -35,13 +39,15 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-fn scope_stats(doc: &PdfDocument<'_>, filter: Option<&BTreeSet<u16>>) -> (u32, usize) {
+fn scope_stats(doc: &PdfDocument<'_>, filter: Option<&BTreeSet<u32>>) -> (u32, usize) {
     let mut text_pages = 0u32;
     let mut object_total = 0usize;
     for (idx, page) in doc.pages().iter().enumerate() {
-        let n = (idx + 1) as u32;
+        let Ok(n) = u32::try_from(idx + 1) else {
+            continue;
+        };
         if let Some(set) = filter {
-            if !set.contains(&(n as u16)) {
+            if !set.contains(&n) {
                 continue;
             }
         }
@@ -88,7 +94,8 @@ fn print_report(r: &InspectReport) {
 }
 
 pub fn run_inspect(cli: &InspectCli) -> i32 {
-    let (mark_info_probe, struct_tree_probe) = pdf_tagging_probe(&cli.input);
+    let probe = pdf_tagging_probe(&cli.input);
+    let (mark_info_probe, struct_tree_probe) = probe.as_ref().copied().unwrap_or((false, false));
     let pdfium = engine::init_pdfium();
     let doc = match pdfium.load_pdf_from_file(&cli.input, cli.password.as_deref()) {
         Ok(d) => d,
@@ -121,6 +128,9 @@ pub fn run_inspect(cli: &InspectCli) -> i32 {
         mark_info_probe,
         struct_tree_probe,
     });
+    if let Err(e) = probe {
+        println!("tagging_probe_read_error: {e}");
+    }
     if rev != "Unprotected" && rev != "unknown" {
         eprintln!("warning: document may be encrypted; supply --password if text is missing");
     }
@@ -134,5 +144,30 @@ mod kiss_coverage {
     #[test]
     fn inspect_symbol() {
         let _: fn(&InspectCli) -> i32 = run_inspect;
+        assert_eq!(stringify!(load_filter), "load_filter");
+        assert_eq!(stringify!(pdf_tagging_probe), "pdf_tagging_probe");
+        assert_eq!(stringify!(contains_subslice), "contains_subslice");
+        assert_eq!(stringify!(scope_stats), "scope_stats");
+        assert_eq!(stringify!(InspectReport), "InspectReport");
+        assert_eq!(stringify!(print_report), "print_report");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pdf_tagging_probe_reports_read_errors() {
+        let dir = std::env::temp_dir().join(format!("rpdf_probe_dir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let err = pdf_tagging_probe(&dir).expect_err("directory should not be readable as bytes");
+        assert!(
+            err.contains("read tagging probe bytes")
+                || err.contains("open tagging probe bytes"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

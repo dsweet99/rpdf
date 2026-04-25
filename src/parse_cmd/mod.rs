@@ -5,7 +5,8 @@ use crate::engine;
 use crate::expand::expand_inputs;
 use crate::model::{self, DocumentJson, ParseConfig};
 use crate::parse_batch;
-use crate::parse_document::{build_document_json, eprint_partial_success, write_json_document};
+use crate::parse_document::{build_document_json, eprint_partial_success, write_exclusive, write_json_document};
+use crate::parse_overwrite;
 use crate::pagespec::parse_pageset;
 use crate::parse_validate;
 use pdfium_render::prelude::*;
@@ -17,7 +18,6 @@ use std::path::{Path, PathBuf};
 pub use parse_validate::validate_parse_cli;
 
 pub fn run_parse(cli: &ParseCli) -> i32 {
-    let pdfium = engine::init_pdfium();
     let inputs = match expand_inputs(&cli.inputs) {
         Ok(v) => v,
         Err(e) => {
@@ -37,6 +37,16 @@ pub fn run_parse(cli: &ParseCli) -> i32 {
         }
     };
     let cfg = parse_config(cli);
+    let pdfium = engine::init_pdfium();
+    if inputs.len() == 1 && cli.output_dir.is_some() {
+        return run_parse_one_with_output_dir(
+            &pdfium,
+            cli,
+            &inputs[0],
+            page_filter.as_ref(),
+            &cfg,
+        );
+    }
     if inputs.len() > 1 {
         parse_batch::run_parse_batch(&pdfium, cli, &inputs, page_filter.as_ref(), &cfg)
     } else {
@@ -56,7 +66,7 @@ pub fn parse_config(cli: &ParseCli) -> ParseConfig {
     }
 }
 
-pub fn load_pages_filter(cli: &ParseCli) -> Result<Option<BTreeSet<u16>>, String> {
+pub fn load_pages_filter(cli: &ParseCli) -> Result<Option<BTreeSet<u32>>, String> {
     cli.pages
         .as_ref()
         .map_or(Ok(None), |s| parse_pageset(s).map(Some))
@@ -87,17 +97,40 @@ fn emit_markdown_output(cli: &ParseCli, input: &Path, md_out: &str) -> i32 {
         .output
         .clone()
         .unwrap_or_else(|| input.with_extension("md"));
-    if out_path.exists() {
-        eprintln!("refusing to overwrite {}", out_path.display());
-        return 1;
-    }
-    match fs::write(&out_path, md_out.as_bytes()) {
+    match write_exclusive(&out_path, |buf| {
+        buf.extend_from_slice(md_out.as_bytes());
+        Ok(())
+    }) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("{e}");
-            2
+            if e.starts_with("refusing to overwrite ") {
+                1
+            } else {
+                2
+            }
         }
     }
+}
+
+fn preflight_single_output_paths(cli: &ParseCli, input: &Path) -> i32 {
+    let md_path = cli
+        .output
+        .clone()
+        .unwrap_or_else(|| input.with_extension("md"));
+    if let Some((target, path)) = parse_overwrite::first_existing_output(
+        (!cli.stdout).then_some(md_path.as_path()),
+        cli.json.as_deref(),
+        cli.debug_json.as_deref(),
+    ) {
+        parse_overwrite::emit_overwrite(path);
+        return if matches!(target, parse_overwrite::OverwriteTarget::Markdown) {
+            1
+        } else {
+            2
+        };
+    }
+    0
 }
 
 fn run_parse_one_postprocess(md: &str) -> String {
@@ -107,13 +140,69 @@ fn run_parse_one_postprocess(md: &str) -> String {
     model::normalize_text(&model::postprocess_extracted_markdown(md))
 }
 
+fn write_single_json_artifacts(cli: &ParseCli, dj: &DocumentJson) -> i32 {
+    let wrote_json = match cli.json.as_deref() {
+        Some(path) => {
+            let c = write_json_out(path, dj);
+            if c != 0 {
+                return c;
+            }
+            true
+        }
+        None => false,
+    };
+    if let Some(p) = &cli.debug_json {
+        let c = write_json_out(p, dj);
+        if c != 0 {
+            rollback_single_json(cli, wrote_json);
+            return c;
+        }
+    }
+    0
+}
+
+fn rollback_single_json(cli: &ParseCli, wrote_json: bool) {
+    if !wrote_json {
+        return;
+    }
+    if let Some(json_path) = &cli.json {
+        let _ = fs::remove_file(json_path);
+    }
+}
+
+fn cleanup_single_json_artifacts(cli: &ParseCli) {
+    if let Some(p) = &cli.json {
+        let _ = fs::remove_file(p);
+    }
+    if let Some(p) = &cli.debug_json {
+        let _ = fs::remove_file(p);
+    }
+}
+
+fn write_single_outputs(cli: &ParseCli, input: &Path, md_out: &str, dj: &DocumentJson) -> i32 {
+    let json_code = write_single_json_artifacts(cli, dj);
+    if json_code != 0 {
+        return json_code;
+    }
+    let md_code = emit_markdown_output(cli, input, md_out);
+    if md_code != 0 {
+        cleanup_single_json_artifacts(cli);
+        return md_code;
+    }
+    md_code
+}
+
 fn run_parse_one(
     pdfium: &Pdfium,
     cli: &ParseCli,
     input: &Path,
-    page_filter: Option<&BTreeSet<u16>>,
+    page_filter: Option<&BTreeSet<u32>>,
     cfg: &ParseConfig,
 ) -> i32 {
+    let preflight_code = preflight_single_output_paths(cli, input);
+    if preflight_code != 0 {
+        return preflight_code;
+    }
     let doc = match pdfium.load_pdf_from_file(input, cli.password.as_deref()) {
         Ok(d) => d,
         Err(e) => {
@@ -129,33 +218,61 @@ fn run_parse_one(
         cli.quiet,
     );
     let md_out = run_parse_one_postprocess(&md);
-    if !cli.stdout {
-        let r = emit_markdown_output(cli, input, &md_out);
-        if r != 0 {
-            return r;
-        }
-    }
-    if let Some(p) = &cli.json {
-        let c = write_json_out(p, &dj);
-        if c != 0 {
-            return c;
-        }
-    }
-    if let Some(p) = &cli.debug_json {
-        let c = write_json_out(p, &dj);
-        if c != 0 {
-            return c;
-        }
-    }
-    if cli.stdout {
-        let r = emit_markdown_output(cli, input, &md_out);
-        if r != 0 {
-            return r;
-        }
+    let write_code = write_single_outputs(cli, input, &md_out, &dj);
+    if write_code != 0 {
+        return write_code;
     }
     let code = dj.status.exit_code();
     eprint_partial_success(cli.quiet, dj.status, &dj.failed_pages);
     code
+}
+
+fn run_parse_one_with_output_dir(
+    pdfium: &Pdfium,
+    cli: &ParseCli,
+    input: &Path,
+    page_filter: Option<&BTreeSet<u32>>,
+    cfg: &ParseConfig,
+) -> i32 {
+    let Some(dir) = cli.output_dir.as_ref() else {
+        return run_parse_one(pdfium, cli, input, page_filter, cfg);
+    };
+    if let Err(e) = fs::create_dir_all(dir) {
+        eprintln!("{}: {e}", dir.display());
+        return 2;
+    }
+    let raw_stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map_or_else(|| "input-1".to_string(), str::to_owned);
+    let output = dir.join(format!("{raw_stem}.md"));
+    let json = cli
+        .json
+        .as_ref()
+        .and_then(|p| p.file_name().and_then(|x| x.to_str()))
+        .map(|name| dir.join(format!("{raw_stem}.{name}")));
+    let debug_json = cli
+        .debug_json
+        .as_ref()
+        .and_then(|p| p.file_name().and_then(|x| x.to_str()))
+        .map(|name| dir.join(format!("{raw_stem}.{name}")));
+    let single_cli = ParseCli {
+        inputs: vec![input.to_path_buf()],
+        output: Some(output),
+        json,
+        stdout: cli.stdout,
+        output_dir: None,
+        pages: cli.pages.clone(),
+        password: cli.password.clone(),
+        use_struct_tree: cli.use_struct_tree,
+        reading_order: cli.reading_order.clone(),
+        table_mode: cli.table_mode.clone(),
+        include_header_footer: cli.include_header_footer,
+        keep_line_breaks: cli.keep_line_breaks,
+        quiet: cli.quiet,
+        debug_json,
+    };
+    run_parse_one(pdfium, &single_cli, input, page_filter, cfg)
 }
 
 #[cfg(test)]
@@ -166,8 +283,31 @@ mod kiss_coverage {
     fn handler_refs() {
         let _: fn(&ParseCli) -> i32 = run_parse;
         let _: fn(&ParseCli, usize) -> Result<(), String> = validate_parse_cli;
-        let _: fn(&Pdfium, &ParseCli, &std::path::Path, Option<&BTreeSet<u16>>, &ParseConfig) -> i32 =
+        let _: fn(&Pdfium, &ParseCli, &std::path::Path, Option<&BTreeSet<u32>>, &ParseConfig) -> i32 =
             run_parse_one;
+        assert_eq!(stringify!(write_json_out), "write_json_out");
+        assert_eq!(stringify!(emit_markdown_output), "emit_markdown_output");
+        assert_eq!(
+            stringify!(preflight_single_output_paths),
+            "preflight_single_output_paths"
+        );
+        assert_eq!(
+            stringify!(crate::parse_overwrite::first_existing_output),
+            "crate::parse_overwrite::first_existing_output"
+        );
+        assert_eq!(
+            stringify!(write_single_json_artifacts),
+            "write_single_json_artifacts"
+        );
+        assert_eq!(
+            stringify!(cleanup_single_json_artifacts),
+            "cleanup_single_json_artifacts"
+        );
+        assert_eq!(stringify!(write_single_outputs), "write_single_outputs");
+        assert_eq!(
+            stringify!(run_parse_one_postprocess),
+            "run_parse_one_postprocess"
+        );
         assert_eq!(
             stringify!(crate::parse_document::build_document_json),
             "crate::parse_document::build_document_json"

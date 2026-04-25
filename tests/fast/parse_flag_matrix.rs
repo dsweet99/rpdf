@@ -3,6 +3,18 @@ use std::process::Command;
 
 use super::common;
 
+fn setup_two_pdf_inputs(prefix: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let sample = common::sample_pdf();
+    let dir = std::env::temp_dir().join(format!("{prefix}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let a = dir.join("a.pdf");
+    let b = dir.join("b.pdf");
+    fs::copy(&sample, &a).expect("copy a");
+    fs::copy(&sample, &b).expect("copy b");
+    (dir, a, b)
+}
+
 #[test]
 fn parse_rejects_stdout_with_output_dir() {
     let pdf = common::sample_pdf();
@@ -98,7 +110,8 @@ fn parse_accepts_json_when_directory_operand_expands_to_one_pdf() {
         .expect("spawn");
     assert!(status.success());
     let raw = fs::read_to_string(&json_out).expect("read json");
-    assert!(raw.contains("\"status\""));
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+    assert!(parsed.get("status").is_some());
     let _ = fs::remove_dir_all(&base);
 }
 
@@ -167,6 +180,71 @@ fn parse_rejects_identical_json_and_debug_json_paths() {
 }
 
 #[test]
+fn parse_rejects_same_json_debug_basename_with_output_dir() {
+    let sample = common::sample_pdf();
+    let dir = std::env::temp_dir().join(format!("rpdf_same_base_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let a = dir.join("a.pdf");
+    let b = dir.join("b.pdf");
+    fs::copy(&sample, &a).expect("copy a");
+    fs::copy(&sample, &b).expect("copy b");
+    let out = dir.join("out");
+    let json_out = dir.join("x").join("out.json");
+    let dbg_out = dir.join("y").join("out.json");
+    let status = Command::new(common::exe())
+        .arg("parse")
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--json")
+        .arg(&json_out)
+        .arg("--debug-json")
+        .arg(&dbg_out)
+        .arg(&a)
+        .arg(&b)
+        .status()
+        .expect("spawn");
+    assert_eq!(status.code(), Some(1));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_rejects_json_without_filename_with_output_dir() {
+    let (dir, a, b) = setup_two_pdf_inputs("rpdf_json_basename");
+    let out = dir.join("out");
+    let status = Command::new(common::exe())
+        .arg("parse")
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--json")
+        .arg(std::path::Path::new("/"))
+        .arg(&a)
+        .arg(&b)
+        .status()
+        .expect("spawn");
+    assert_eq!(status.code(), Some(1));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_rejects_json_md_basename_with_output_dir() {
+    let (dir, a, b) = setup_two_pdf_inputs("rpdf_json_md_name");
+    let out = dir.join("out");
+    let status = Command::new(common::exe())
+        .arg("parse")
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--json")
+        .arg("md")
+        .arg(&a)
+        .arg(&b)
+        .status()
+        .expect("spawn");
+    assert_eq!(status.code(), Some(1));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn parse_rejects_stdout_when_directory_expands_to_multiple_pdfs() {
     let sample = common::sample_pdf();
     let dir = std::env::temp_dir().join(format!("rpdf_stdout_multi_{}", std::process::id()));
@@ -228,7 +306,8 @@ fn parse_single_stdout_and_json_succeeds() {
     assert!(out.status.success());
     assert!(!out.stdout.is_empty());
     let raw = fs::read_to_string(&json_out).expect("read json");
-    assert!(raw.contains("\"status\""));
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+    assert!(parsed.get("status").is_some());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -251,7 +330,8 @@ fn parse_single_output_and_json_succeeds() {
         .expect("spawn");
     assert!(status.success());
     let raw = fs::read_to_string(&json_out).expect("read json");
-    assert!(raw.contains("\"status\""));
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+    assert!(parsed.get("status").is_some());
     let _ = fs::remove_dir_all(&dir);
 }
 
