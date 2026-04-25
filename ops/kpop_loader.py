@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -16,29 +17,46 @@ def add_bench_path(bench: Path) -> None:
         sys.path.insert(0, s)
 
 
-def resolve_parsers(bench: Path, rpdf_only: bool) -> list[str]:
-    add_bench_path(bench)
-    if rpdf_only:
-        return ["rpdf"]
-    aliases: dict[str, object] = {}
+def _loader_aliases_or_empty() -> dict[str, object]:
     try:
         from pdf_bench.loader import PARSER_ALIASES
         if isinstance(PARSER_ALIASES, dict):
-            aliases = PARSER_ALIASES
+            return PARSER_ALIASES
     except ModuleNotFoundError as e:
         if e.name is None or not e.name.startswith("pdf_bench"):
             raise
+    return {}
+
+
+def _filter_explicit_parser_order(
+    names: Iterable[str],
+    aliases: dict[str, object],
+) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for x in names:
+        p = x.strip()
+        if not p or p in seen or ollama(p, aliases) or cloud(p) or landing(p):
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def resolve_parsers(
+    bench: Path,
+    rpdf_only: bool,
+    eval_default_parsers: tuple[str, ...] | None = None,
+) -> list[str]:
+    add_bench_path(bench)
+    if rpdf_only:
+        return ["rpdf"]
+    aliases = _loader_aliases_or_empty()
     override = os.environ.get("RPDF_OPS_PARSERS", "").strip()
     if override:
-        out: list[str] = []
-        seen: set[str] = set()
-        for x in override.split(","):
-            p = x.strip()
-            if not p or p in seen or ollama(p, aliases) or cloud(p) or landing(p):
-                continue
-            seen.add(p)
-            out.append(p)
-        return out
+        return _filter_explicit_parser_order(override.split(","), aliases)
+    if eval_default_parsers is not None:
+        return _filter_explicit_parser_order(eval_default_parsers, aliases)
     from pdf_bench.loader import PARSER_ALIASES, PARSER_REGISTRY
     base = sorted(
         p

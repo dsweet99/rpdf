@@ -12,6 +12,13 @@ import click
 
 F = TypeVar("F", bound=Callable[..., object])
 
+EVAL_DEFAULT_PARSERS: tuple[str, ...] = (
+    "markitdown",
+    "marker_native",
+    "opendataloader",
+    "rpdf",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class GoIn:
@@ -86,6 +93,7 @@ def go(g: GoIn) -> None:
         rpdf_only=g.rpdf_only,
         max_doc=g.max_doc,
         use_process_pool=not g.no_suite_mp,
+        eval_default_parsers=None if g.rpdf_only else EVAL_DEFAULT_PARSERS,
     )
     out = _run_wrapped(lambda: run_eval(p))
     out = _run_wrapped(lambda: attach_kpop(out))
@@ -134,9 +142,9 @@ def cli() -> None:
     "all",
     context_settings={"show_default": True},
     help=(
-        "Run every parser in the pdf_bench registry that can be exercised locally without "
-        "remote APIs or paid services (omits ollama, cloud/API ids, and landing). "
-        "Set RPDF_OPS_PARSERS to a comma list to override."
+        "Run markitdown, marker_native, opendataloader, and rpdf (local parsers without "
+        "remote APIs or paid services). Set RPDF_OPS_PARSERS to a comma-separated list to "
+        "override."
     ),
 )
 @_shared_command_options

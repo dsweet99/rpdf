@@ -11,3 +11,4 @@ class EvalParams:
     rpdf_only: bool
     max_doc: int | None
     use_process_pool: bool
+    eval_default_parsers: tuple[str, ...] | None = None

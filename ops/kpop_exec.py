@@ -147,7 +147,7 @@ def run_eval(p: EvalParams) -> dict[str, Any]:
     if not corp.is_dir():
         msg = f"bench corpus missing: {corp}"
         raise FileNotFoundError(msg)
-    part = resolve_parsers(p.bench, p.rpdf_only)
+    part = resolve_parsers(p.bench, p.rpdf_only, p.eval_default_parsers)
     if not part:
         msg = "no parsers selected"
         raise ValueError(msg)

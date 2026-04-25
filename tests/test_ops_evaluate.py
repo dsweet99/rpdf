@@ -82,6 +82,7 @@ def test_evaluate_all_subhelp() -> None:
     )
     assert r.returncode == 0
     assert "all" in r.stdout.lower() or "bench" in r.stdout.lower()
+    assert "markitdown" in r.stdout.lower()
     assert "local" in r.stdout.lower() or "ollama" in r.stdout.lower()
     assert "RPDF_OPS_PARSERS" in r.stdout
     assert "--no-suite-mp" in r.stdout
@@ -246,6 +247,30 @@ def test_resolve_parsers_filters_override_aliases_to_ollama(
     assert out == expected
 
 
+@pytest.mark.parametrize(
+    ("env_parsers", "expected"),
+    [
+        (None, ["markitdown", "marker_native", "opendataloader", "rpdf"]),
+        ("alpha,beta", ["alpha", "beta"]),
+    ],
+)
+def test_resolve_parsers_eval_default_and_override_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    env_parsers: str | None,
+    expected: list[str],
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    if env_parsers is None:
+        monkeypatch.delenv("RPDF_OPS_PARSERS", raising=False)
+    else:
+        monkeypatch.setenv("RPDF_OPS_PARSERS", env_parsers)
+    want = ("markitdown", "marker_native", "opendataloader", "rpdf")
+    out = resolve_parsers(Path("."), rpdf_only=False, eval_default_parsers=want)
+    assert out == expected
+
+
 def test_resolve_parsers_removes_ollama_from_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -390,6 +415,7 @@ def test_bench_list_raises_without_repo() -> None:
 def _write_min_bench(p: Path) -> None:
     sys.path.insert(0, str(ROOT / "ops"))
     from kpop_metric_ref import CUAD_FOUR
+
     m5 = [
         "edit_similarity",
         "chrf++",
@@ -398,6 +424,7 @@ def _write_min_bench(p: Path) -> None:
         "element_f1",
     ]
     m3 = m5[:3]
+    m_cuad = list(CUAD_FOUR)
     bdir = p / "benchmarks"
     bdir.mkdir(parents=True)
 
@@ -421,7 +448,7 @@ metric_config:
     _one("legal_108docs.yaml", m5)
     _one("invoices_100docs.yaml", m5 + ["teds"])
     _one("hr_34docs.yaml", m5)
-    _one("cuad_75docs.yaml", CUAD_FOUR)
+    _one("cuad_75docs.yaml", m_cuad)
     _one("arxiv_10docs.yaml", m3)
 
 
@@ -444,14 +471,13 @@ def test_list_suite_rows_metrics_match_benchmark_yaml() -> None:
     }
     by_id = {r[0]: r[4] for r in rows}
     assert by_id["synthetic"] == FIVE
+    assert by_id["cuad"] == CUAD_FOUR
     assert by_id["arxiv"] == [
         "edit_similarity",
         "chrf++",
         "character_error_rate",
     ]
-    assert "teds" in by_id["invoices"] and "teds" not in by_id["cuad"]
-    assert "tree_similarity" not in by_id["cuad"]
-    assert by_id["cuad"] == CUAD_FOUR
+    assert "teds" in by_id["invoices"]
 
 
 def test_synthetic_suite_max_documents_is_capped_at_32() -> None:

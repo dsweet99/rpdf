@@ -91,7 +91,7 @@ def list_suite_rows(
         ),
         (
             "cuad",
-            "CUAD real contracts",
+            "CUAD contracts",
             _CUAD,
         ),
         (
