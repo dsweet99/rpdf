@@ -6,18 +6,21 @@ from typing import Any
 from kpop_metric_ref import applicable_gates, gating_metrics_for_suite
 
 
-def _check(n: str, v: float | None) -> bool:
-    if v is None or (isinstance(v, float) and math.isnan(v)):
+def _check(n: str, v: Any) -> bool:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
         return False
+    if isinstance(v, float) and math.isnan(v):
+        return False
+    f = float(v)
     if n == "edit_similarity":
-        return v >= 0.95
+        return f >= 0.95
     if n == "chrf++":
-        return v >= 95.0
+        return f >= 95.0
     if n == "character_error_rate":
-        return v <= 0.05
+        return f <= 0.05
     if n == "tree_similarity":
-        return v >= 0.80
-    return n == "element_f1" and v >= 0.80
+        return f >= 0.80
+    return n == "element_f1" and f >= 0.80
 
 
 def _row_fl(
@@ -26,7 +29,7 @@ def _row_fl(
     if not ok:
         return False, ["parse_error"]
     if not need:
-        return True, []
+        return False, ["no_gated_metrics"]
     bad: list[str] = []
     for n in need:
         v = metrics.get(n)
@@ -51,23 +54,28 @@ def _normalize_row(row: Any) -> tuple[dict[str, Any], bool, dict[str, Any]]:
     )
 
 
+def _doc_key(v: Any) -> str | None:
+    if isinstance(v, str):
+        t = v.strip()
+        return t if t else None
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        if math.isnan(v):
+            return None
+        if v.is_integer():
+            return str(int(v))
+        return str(v)
+    return None
+
+
 def _count_documents(rows: list[dict[str, Any]]) -> int:
     docs = {
-        str(x["document_id"])
+        k
         for x in rows
-        if "document_id" in x and isinstance(x["document_id"], str) and x["document_id"]
-    }
-    return len(docs)
-
-
-def _count_documents_for_parser(rows: list[dict[str, Any]], parser: str) -> int:
-    docs = {
-        str(x["document_id"])
-        for x in rows
-        if x.get("parser_name") == parser
-        and "document_id" in x
-        and isinstance(x["document_id"], str)
-        and x["document_id"]
+        if "document_id" in x and (k := _doc_key(x["document_id"])) is not None
     }
     return len(docs)
 
@@ -88,13 +96,30 @@ def _build_suite_rows(block: dict[str, Any], gmed: list[str]) -> list[dict[str, 
     return out
 
 
-def _parser_document_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+def _parser_document_counts(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, int], int]:
     parser_names = {
-        str(x["parser_name"])
+        x["parser_name"].strip()
         for x in rows
-        if isinstance(x.get("parser_name"), str) and x["parser_name"]
+        if isinstance(x.get("parser_name"), str) and x["parser_name"].strip()
     }
-    return {p: _count_documents_for_parser(rows, p) for p in sorted(parser_names)}
+    parser_doc_sets: dict[str, set[str]] = {}
+    for p in sorted(parser_names):
+        docs = {
+            k
+            for x in rows
+            if isinstance(x.get("parser_name"), str)
+            and x["parser_name"].strip() == p
+            and "document_id" in x
+            and (k := _doc_key(x["document_id"])) is not None
+        }
+        parser_doc_sets[p] = docs
+    parser_doc_counts = {k: len(v) for k, v in parser_doc_sets.items()}
+    shared_document_count = 0
+    if parser_doc_sets:
+        shared_document_count = len(set.intersection(*parser_doc_sets.values()))
+    return parser_doc_counts, shared_document_count
 
 
 def _suite_kpop(
@@ -111,15 +136,16 @@ def _suite_kpop(
     rows = _build_suite_rows(block, gmed)
     pass_count = sum(1 for x in rows if x["kpop_pass"])
     document_count = _count_documents(rows)
-    per_parser_doc_counts = _parser_document_counts(rows)
+    per_parser_doc_counts, shared_document_count = _parser_document_counts(rows)
     if expected_documents is None:
-        documents_complete = True
+        documents_complete = False
     elif per_parser_doc_counts:
-        documents_complete = all(
-            v >= expected_documents for v in per_parser_doc_counts.values()
+        documents_complete = (
+            all(v >= expected_documents for v in per_parser_doc_counts.values())
+            and shared_document_count >= expected_documents
         )
     else:
-        documents_complete = document_count >= expected_documents
+        documents_complete = False
     all_rows_pass = bool(rows) and pass_count == len(rows) and documents_complete
     return {
         "gated_metrics": gmed,
@@ -127,6 +153,7 @@ def _suite_kpop(
         "row_count": len(rows),
         "document_count": document_count,
         "parser_document_counts": per_parser_doc_counts,
+        "shared_document_count": shared_document_count,
         "expected_documents": expected_documents,
         "kpop_documents_complete": documents_complete,
         "kpop_pass_count": pass_count,
@@ -144,7 +171,9 @@ def attach_kpop(out: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(exp, dict):
         exp = {}
     suite_out: dict[str, Any] = {}
-    for sid, block in ps.items():
+    suite_ids = sorted(set(ps) | set(scm) | set(exp))
+    for sid in suite_ids:
+        block = ps.get(sid, {})
         if isinstance(block, dict):
             item = dict(block)
         else:

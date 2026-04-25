@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,12 +12,6 @@ import click
 
 F = TypeVar("F", bound=Callable[..., object])
 
-_OPS = Path(__file__).resolve().parent
-_OPS_STR = str(_OPS)
-if not (sys.path and sys.path[0] == _OPS_STR):
-    sys.path[:] = [p for p in sys.path if p != _OPS_STR]
-    sys.path.insert(0, _OPS_STR)
-
 
 @dataclass(frozen=True, slots=True)
 class GoIn:
@@ -27,7 +20,6 @@ class GoIn:
     rpdf_bin: Path | None
     max_doc: int | None
     no_suite_mp: bool
-    all_registry_parsers: bool
 
 
 def _root() -> Path:
@@ -94,7 +86,6 @@ def go(g: GoIn) -> None:
         rpdf_only=g.rpdf_only,
         max_doc=g.max_doc,
         use_process_pool=not g.no_suite_mp,
-        all_registry_parsers=g.all_registry_parsers,
     )
     out = _run_wrapped(lambda: run_eval(p))
     out = _run_wrapped(lambda: attach_kpop(out))
@@ -143,9 +134,9 @@ def cli() -> None:
     "all",
     context_settings={"show_default": True},
     help=(
-        "Run all pdf_bench parser registry ids except aliases. "
-        "Set RPDF_OPS_EXCLUDE_CLOUD=1 to drop cloud or API-style ids, "
-        "or RPDF_OPS_PARSERS to pin an explicit list."
+        "Run every parser in the pdf_bench registry that can be exercised locally without "
+        "remote APIs or paid services (omits ollama, cloud/API ids, and landing). "
+        "Set RPDF_OPS_PARSERS to a comma list to override."
     ),
 )
 @_shared_command_options
@@ -162,7 +153,6 @@ def all_cmd(
         rpdf_bin=rpdf_bin,
         max_doc=max_doc,
         no_suite_mp=no_suite_mp,
-        all_registry_parsers=True,
     )
     go(g)
 
@@ -182,7 +172,6 @@ def rpdf_cmd(
         rpdf_bin=rpdf_bin,
         max_doc=max_doc,
         no_suite_mp=no_suite_mp,
-        all_registry_parsers=False,
     )
     go(g)
 

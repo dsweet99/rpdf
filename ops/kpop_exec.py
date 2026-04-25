@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,19 +17,35 @@ from kpop_loader import (
 from kpop_suites import list_suite_rows
 from kpop_write import write_suite_cfg
 
+SuiteRow = tuple[str, str, str, dict[str, Any], list[str]]
 
-def _build_yamls(b: dict[str, Any]) -> list[tuple[str, str]]:
-    p, tmp, par, raw = b["p"], b["tmp"], b["parsers"], b["raw"]
+
+@dataclass(frozen=True, slots=True)
+class RunCtx:
+    bench: Path
+    rpdf_bin: str
+    params: EvalParams | None = None
+    tmp: Path | None = None
+    parsers: list[str] | None = None
+    inner_workers: int = 0
+    raw_rows: list[SuiteRow] | None = None
+    ypaths: list[tuple[str, str]] | None = None
+    suite_workers: int = 1
+
+
+def _build_yamls(inp: RunCtx) -> list[tuple[str, str]]:
+    if inp.params is None or inp.tmp is None or inp.parsers is None or inp.raw_rows is None:
+        raise ValueError("build context missing required fields")
     ypaths: list[tuple[str, str]] = []
-    for suite_id, _lab, d, f, metrics in raw:
+    for suite_id, _lab, d, f, metrics in inp.raw_rows:
         c = {
-            "bench": p.bench,
-            "tmp": tmp,
+            "bench": inp.params.bench,
+            "tmp": inp.tmp,
             "suite_id": suite_id,
             "desc": d,
             "filt": f,
-            "parsers": par,
-            "pworkers": b["inner"],
+            "parsers": inp.parsers,
+            "pworkers": inp.inner_workers,
             "metrics": metrics,
         }
         pth = write_suite_cfg(c)
@@ -36,54 +53,47 @@ def _build_yamls(b: dict[str, Any]) -> list[tuple[str, str]]:
     return ypaths
 
 
-def _pool_run(h: dict[str, Any]) -> dict[str, Any]:
-    yp, b_s, r, inner, su = h["ypaths"], h["bench_s"], h["rpdf"], h["inner"], h["su"]
+def _pool_run(inp: RunCtx) -> dict[str, Any]:
+    if inp.ypaths is None:
+        raise ValueError("dispatch context missing ypaths")
+    b_s = str(inp.bench.resolve())
     wargs: list[tuple[str, str, str, int]] = [
-        (str(ypo), b_s, r, inner) for _, ypo in yp
+        (str(ypo), b_s, inp.rpdf_bin, inp.inner_workers) for _, ypo in inp.ypaths
     ]
     m: dict[str, Any] = {}
-    with ProcessPoolExecutor(max_workers=su) as ex:
-        futs = {ex.submit(run_from_pack, w): yp[i][0] for i, w in enumerate(wargs)}
+    with ProcessPoolExecutor(max_workers=inp.suite_workers) as ex:
+        futs = {
+            ex.submit(run_from_pack, w): inp.ypaths[i][0] for i, w in enumerate(wargs)
+        }
         for ft in as_completed(futs):
             m[futs[ft]] = ft.result()
     return m
 
 
-def _serial_run(s: dict[str, Any]) -> dict[str, Any]:
-    yp, bench, r, inner = s["ypaths"], s["bench"], s["rpdf"], s["inner"]
-    b_s = str(bench.resolve())
+def _serial_run(inp: RunCtx) -> dict[str, Any]:
+    if inp.ypaths is None:
+        raise ValueError("dispatch context missing ypaths")
+    b_s = str(inp.bench.resolve())
     m: dict[str, Any] = {}
-    for sid, ypth in yp:
-        wk: tuple[str, str, str, int] = (ypth, b_s, r, inner)
+    for sid, ypth in inp.ypaths:
+        wk: tuple[str, str, str, int] = (
+            ypth,
+            b_s,
+            inp.rpdf_bin,
+            inp.inner_workers,
+        )
         m[sid] = run_from_pack(wk)
     return m
 
 
-def _run_dispatch(d: dict) -> Any:
-    yp, p, rpdf, h = d["yp"], d["p"], d["rd"], d["h"]
-    b_s, su, i = str(p.bench.resolve()), h["su"], h["inner"]
-    if su > 1:
-        return _pool_run(
-            {
-                "ypaths": yp,
-                "bench_s": b_s,
-                "rpdf": rpdf,
-                "inner": i,
-                "su": su,
-            }
-        )
-    return _serial_run(
-        {
-            "ypaths": yp,
-            "bench": p.bench,
-            "rpdf": rpdf,
-            "inner": i,
-        }
-    )
+def _run_dispatch(inp: RunCtx) -> dict[str, Any]:
+    if inp.suite_workers > 1:
+        return _pool_run(inp)
+    return _serial_run(inp)
 
 
 def _suite_expected_documents(
-    raw: list[tuple[str, str, str, dict[str, Any], list[str]]],
+    raw: list[SuiteRow],
 ) -> dict[str, int]:
     out: dict[str, int] = {}
     for sid, _lab, _d, filt, _metrics in raw:
@@ -95,20 +105,30 @@ def _suite_expected_documents(
 
 def _run_eval_body(
     p: EvalParams, part: list[str], rpdf: str
-) -> tuple[dict[str, Any], list[tuple[str, str, str, dict[str, Any], list[str]]]]:
+) -> tuple[dict[str, Any], list[SuiteRow]]:
     raw = list_suite_rows(p.bench, p.max_doc)
     su, inn = par_count(p, len(raw)), 0
     with tempfile.TemporaryDirectory() as td:
         tmp, inn = Path(td), inner_workers(su)
-        b = {"p": p, "tmp": tmp, "parsers": part, "inner": inn, "raw": raw}
-        yd = _build_yamls(b)
+        yd = _build_yamls(
+            RunCtx(
+                params=p,
+                tmp=tmp,
+                parsers=part,
+                inner_workers=inn,
+                raw_rows=raw,
+                bench=p.bench,
+                rpdf_bin=rpdf,
+            )
+        )
         m = _run_dispatch(
-            {
-                "yp": yd,
-                "p": p,
-                "rd": rpdf,
-                "h": {"su": su, "inner": inn},
-            }
+            RunCtx(
+                ypaths=yd,
+                bench=p.bench,
+                rpdf_bin=rpdf,
+                inner_workers=inn,
+                suite_workers=su,
+            )
         )
     return m, raw
 
@@ -127,7 +147,10 @@ def run_eval(p: EvalParams) -> dict[str, Any]:
     if not corp.is_dir():
         msg = f"bench corpus missing: {corp}"
         raise FileNotFoundError(msg)
-    part = resolve_parsers(p.bench, p.rpdf_only, p.all_registry_parsers)
+    part = resolve_parsers(p.bench, p.rpdf_only)
+    if not part:
+        msg = "no parsers selected"
+        raise ValueError(msg)
     rpdf = str(p.rpdf_bin.resolve())
     needs_rpdf_bin = "rpdf" in part
     if needs_rpdf_bin and not p.rpdf_bin.is_file():

@@ -11,4 +11,3 @@ class EvalParams:
     rpdf_only: bool
     max_doc: int | None
     use_process_pool: bool
-    all_registry_parsers: bool

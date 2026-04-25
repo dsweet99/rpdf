@@ -7,23 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from evalparams import EvalParams
-
-
-def _cloud(pid: str) -> bool:
-    t = pid.lower()
-    for s in (
-        "aws",
-        "azure",
-        "google",
-        "llamaparse",
-        "anthropic",
-        "openai",
-        "databricks",
-        "sagemaker",
-    ):
-        if s in t:
-            return True
-    return t.startswith("pdfsmith-gemini")
+from kpop_parser_ids import cloud, landing, ollama
 
 
 def add_bench_path(bench: Path) -> None:
@@ -32,22 +16,36 @@ def add_bench_path(bench: Path) -> None:
         sys.path.insert(0, s)
 
 
-def resolve_parsers(
-    bench: Path, rpdf_only: bool, all_registry: bool
-) -> list[str]:
+def resolve_parsers(bench: Path, rpdf_only: bool) -> list[str]:
     add_bench_path(bench)
     if rpdf_only:
         return ["rpdf"]
+    aliases: dict[str, object] = {}
+    try:
+        from pdf_bench.loader import PARSER_ALIASES
+        if isinstance(PARSER_ALIASES, dict):
+            aliases = PARSER_ALIASES
+    except ModuleNotFoundError as e:
+        if e.name is None or not e.name.startswith("pdf_bench"):
+            raise
     override = os.environ.get("RPDF_OPS_PARSERS", "").strip()
     if override:
-        return [x.strip() for x in override.split(",") if x.strip()]
+        out: list[str] = []
+        seen: set[str] = set()
+        for x in override.split(","):
+            p = x.strip()
+            if not p or p in seen or ollama(p, aliases) or cloud(p) or landing(p):
+                continue
+            seen.add(p)
+            out.append(p)
+        return out
     from pdf_bench.loader import PARSER_ALIASES, PARSER_REGISTRY
-    base = sorted(p for p in PARSER_REGISTRY if p not in PARSER_ALIASES)
-    ex = os.environ.get("RPDF_OPS_EXCLUDE_CLOUD", "").strip().lower()
-    ex_on = ex in ("1", "true", "yes", "y")
-    if ex_on or not all_registry:
-        return [p for p in base if not _cloud(p)]
-    return base
+    base = sorted(
+        p
+        for p in PARSER_REGISTRY
+        if p not in PARSER_ALIASES and not ollama(p, aliases)
+    )
+    return [p for p in base if not cloud(p) and not landing(p)]
 
 
 def inner_workers(su: int) -> int:
@@ -67,12 +65,32 @@ def par_count(p: EvalParams, n: int) -> int:
 
 def run_from_pack(pack: tuple[str, str, str, int]) -> dict[str, Any]:
     yaml_path, benc, rpdf_bin, pworkers = pack
-    bench = Path(benc)
-    add_bench_path(bench)
+    add_bench_path(Path(benc))
+    return _run_with_rpdf_bin(yaml_path, rpdf_bin, pworkers)
+
+
+def _run_with_rpdf_bin(
+    yaml_path: str, rpdf_bin: str, pworkers: int
+) -> dict[str, Any]:
+    old_rpdf_bin = os.environ.get("RPDF_BIN")
+    os.environ["RPDF_BIN"] = rpdf_bin
+    try:
+        return _run_pack_once(yaml_path, pworkers)
+    finally:
+        _restore_rpdf_bin(old_rpdf_bin)
+
+
+def _restore_rpdf_bin(old_rpdf_bin: str | None) -> None:
+    if old_rpdf_bin is None:
+        os.environ.pop("RPDF_BIN", None)
+        return
+    os.environ["RPDF_BIN"] = old_rpdf_bin
+
+
+def _run_pack_once(yaml_path: str, pworkers: int) -> dict[str, Any]:
     from kpop_serialize import serialize_bench
     from pdf_bench.loader import load_benchmark_config
     from pdf_bench.runner import BenchmarkRunner
-    os.environ["RPDF_BIN"] = rpdf_bin
     t0 = time.perf_counter()
     loaded = load_benchmark_config(Path(yaml_path))
     br = BenchmarkRunner(loaded, parallel_workers=pworkers)

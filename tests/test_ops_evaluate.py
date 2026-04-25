@@ -46,6 +46,7 @@ def _stub_eval_result(synthetic_five: list[str]) -> dict[str, object]:
             }
         },
         "suite_computed_metrics": {"synthetic": synthetic_five},
+        "suite_expected_documents": {"synthetic": 1},
     }
 
 
@@ -81,7 +82,8 @@ def test_evaluate_all_subhelp() -> None:
     )
     assert r.returncode == 0
     assert "all" in r.stdout.lower() or "bench" in r.stdout.lower()
-    assert "RPDF_OPS_EXCLUDE_CLOUD" in r.stdout or "cloud" in r.stdout.lower()
+    assert "local" in r.stdout.lower() or "ollama" in r.stdout.lower()
+    assert "RPDF_OPS_PARSERS" in r.stdout
     assert "--no-suite-mp" in r.stdout
 
 
@@ -133,15 +135,246 @@ def test_resolve_parsers_excludes_cloud_for_uppercase_truthy(
     pkg = types.ModuleType("pdf_bench")
     mod = types.ModuleType("pdf_bench.loader")
     mod.PARSER_ALIASES = {}
-    mod.PARSER_REGISTRY = {"rpdf": object(), "pdfsmith-openai": object()}
+    mod.PARSER_REGISTRY = {
+        "rpdf": object(),
+        "pdfsmith-openai": object(),
+        "landing.ai": object(),
+    }
     pkg.loader = mod
     monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
     monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
     monkeypatch.setenv("RPDF_OPS_EXCLUDE_CLOUD", "TRUE")
     monkeypatch.delenv("RPDF_OPS_PARSERS", raising=False)
 
-    out = resolve_parsers(Path("."), rpdf_only=False, all_registry=True)
+    out = resolve_parsers(Path("."), rpdf_only=False)
     assert "pdfsmith-openai" not in out
+    assert "landing.ai" not in out
+
+
+def test_resolve_parsers_excludes_landing_registry_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    pkg = types.ModuleType("pdf_bench")
+    mod = types.ModuleType("pdf_bench.loader")
+    mod.PARSER_ALIASES = {}
+    mod.PARSER_REGISTRY = {"rpdf": object(), "landing.ai": object(), "other": object()}
+    pkg.loader = mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
+    monkeypatch.delenv("RPDF_OPS_EXCLUDE_CLOUD", raising=False)
+    monkeypatch.delenv("RPDF_OPS_PARSERS", raising=False)
+
+    out = resolve_parsers(Path("."), rpdf_only=False)
+    assert "landing.ai" not in out
+    assert out == ["other", "rpdf"]
+
+
+def test_resolve_parsers_filters_landing_ollama_and_variants_in_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    monkeypatch.setenv(
+        "RPDF_OPS_PARSERS",
+        "landing.ai,landing_ai,landing-ai,ollama,marker_ollama,pdfsmith-ollama,pdfsmithollama,rpdf,other",
+    )
+
+    out = resolve_parsers(Path("."), rpdf_only=False)
+    assert "landing.ai" not in out
+    assert "landing_ai" not in out
+    assert "landing-ai" not in out
+    assert "ollama" not in out
+    assert "marker_ollama" not in out
+    assert "pdfsmith-ollama" not in out
+    assert "pdfsmithollama" not in out
+    assert out == ["rpdf", "other"]
+
+
+def _resolve_with_override_aliases(
+    monkeypatch: pytest.MonkeyPatch, aliases: dict[str, str], override: str
+) -> list[str]:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    pkg = types.ModuleType("pdf_bench")
+    mod = types.ModuleType("pdf_bench.loader")
+    mod.PARSER_ALIASES = aliases
+    mod.PARSER_REGISTRY = {}
+    pkg.loader = mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
+    monkeypatch.setenv("RPDF_OPS_PARSERS", override)
+    return resolve_parsers(Path("."), rpdf_only=False)
+
+
+@pytest.mark.parametrize(
+    ("aliases", "override", "expected"),
+    [
+        (
+            {"fast_local": "pdfsmith-ollama", "safe_alias": "rpdf"},
+            "fast_local,safe_alias,other",
+            ["safe_alias", "other"],
+        ),
+        (
+            {"fast_local": "alias_mid", "alias_mid": "pdfsmith-ollama"},
+            "fast_local,other",
+            ["other"],
+        ),
+        (
+            {"FAST_LOCAL": "pdfsmith-ollama", "SAFE_ALIAS": "rpdf"},
+            "fast_local,safe_alias,other",
+            ["safe_alias", "other"],
+        ),
+        (
+            {},
+            "rpdf,rpdf,other,other",
+            ["rpdf", "other"],
+        ),
+    ],
+)
+def test_resolve_parsers_filters_override_aliases_to_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+    aliases: dict[str, str],
+    override: str,
+    expected: list[str],
+) -> None:
+    out = _resolve_with_override_aliases(monkeypatch, aliases=aliases, override=override)
+    assert out == expected
+
+
+def test_resolve_parsers_removes_ollama_from_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    pkg = types.ModuleType("pdf_bench")
+    mod = types.ModuleType("pdf_bench.loader")
+    mod.PARSER_ALIASES = {}
+    mod.PARSER_REGISTRY = {
+        "rpdf": object(),
+        "ollama": object(),
+        "marker_ollama": object(),
+        "pdfsmith-ollama": object(),
+        "pdfsmithollama": object(),
+        "other": object(),
+    }
+    pkg.loader = mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
+    monkeypatch.delenv("RPDF_OPS_EXCLUDE_CLOUD", raising=False)
+    monkeypatch.delenv("RPDF_OPS_PARSERS", raising=False)
+
+    out = resolve_parsers(Path("."), rpdf_only=False)
+    assert "ollama" not in out
+    assert "marker_ollama" not in out
+    assert "pdfsmith-ollama" not in out
+    assert "pdfsmithollama" not in out
+    assert out == ["other", "rpdf"]
+
+
+def test_resolve_parsers_does_not_swallow_loader_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    pkg = types.ModuleType("pdf_bench")
+    mod = types.ModuleType("pdf_bench.loader")
+
+    def _boom(_name: str) -> object:
+        raise RuntimeError("loader exploded")
+
+    mod.__getattr__ = _boom  # type: ignore[attr-defined]
+    pkg.loader = mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
+    monkeypatch.setenv("RPDF_OPS_PARSERS", "rpdf")
+
+    with pytest.raises(RuntimeError, match="loader exploded"):
+        _ = resolve_parsers(Path("."), rpdf_only=False)
+
+
+def test_resolve_parsers_keeps_non_cloud_parser_with_aws_substring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    pkg = types.ModuleType("pdf_bench")
+    mod = types.ModuleType("pdf_bench.loader")
+    mod.PARSER_ALIASES = {}
+    mod.PARSER_REGISTRY = {
+        "rpdf": object(),
+        "laws-parser": object(),
+        "local": object(),
+    }
+    pkg.loader = mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
+    monkeypatch.delenv("RPDF_OPS_EXCLUDE_CLOUD", raising=False)
+    monkeypatch.delenv("RPDF_OPS_PARSERS", raising=False)
+
+    out = resolve_parsers(Path("."), rpdf_only=False)
+    assert "laws-parser" in out
+
+
+def test_resolve_parsers_excludes_pdfsmith_gemini_variants_when_cloud_filtered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    pkg = types.ModuleType("pdf_bench")
+    mod = types.ModuleType("pdf_bench.loader")
+    mod.PARSER_ALIASES = {}
+    mod.PARSER_REGISTRY = {
+        "rpdf": object(),
+        "pdfsmith-gemini": object(),
+        "pdfsmith_gemini": object(),
+        "other": object(),
+    }
+    pkg.loader = mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
+    monkeypatch.setenv("RPDF_OPS_EXCLUDE_CLOUD", "TRUE")
+    monkeypatch.delenv("RPDF_OPS_PARSERS", raising=False)
+
+    out = resolve_parsers(Path("."), rpdf_only=False)
+    assert "pdfsmith-gemini" not in out
+    assert "pdfsmith_gemini" not in out
+    assert out == ["other", "rpdf"]
+
+
+def test_resolve_parsers_excludes_pdfsmith_openai_concat_when_cloud_filtered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import resolve_parsers
+
+    pkg = types.ModuleType("pdf_bench")
+    mod = types.ModuleType("pdf_bench.loader")
+    mod.PARSER_ALIASES = {}
+    mod.PARSER_REGISTRY = {
+        "rpdf": object(),
+        "pdfsmithopenai": object(),
+        "pdfsmithazure": object(),
+        "other": object(),
+    }
+    pkg.loader = mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", mod)
+    monkeypatch.setenv("RPDF_OPS_EXCLUDE_CLOUD", "TRUE")
+    monkeypatch.delenv("RPDF_OPS_PARSERS", raising=False)
+
+    out = resolve_parsers(Path("."), rpdf_only=False)
+    assert "pdfsmithopenai" not in out
+    assert "pdfsmithazure" not in out
+    assert out == ["other", "rpdf"]
 
 
 def test_bench_list_raises_without_repo() -> None:
@@ -262,6 +495,7 @@ def test_kpop_gates_accepts_passing_synthetic() -> None:
     assert gating_metrics_for_suite("cuad") == CUAD_FOUR
     o = {
         "suite_computed_metrics": {"synthetic": FIVE},
+        "suite_expected_documents": {"synthetic": 1},
         "per_suite": {
             "synthetic": {
                 "rows": [
@@ -326,6 +560,25 @@ def _synthetic_suite_out(rows: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def _synthetic_edit_similarity_out(
+    rows: list[dict[str, object]], expected_documents: int
+) -> dict[str, object]:
+    return {
+        "suite_computed_metrics": {"synthetic": ["edit_similarity"]},
+        "suite_expected_documents": {"synthetic": expected_documents},
+        "per_suite": {"synthetic": {"rows": rows}},
+    }
+
+
+def _ok_row(doc_id: object, parser_name: object, metrics: dict[str, float]) -> dict[str, object]:
+    return {
+        "document_id": doc_id,
+        "parser_name": parser_name,
+        "success": True,
+        "metrics": metrics,
+    }
+
+
 def test_attach_kpop_flags_incomplete_document_coverage() -> None:
     sys.path.insert(0, str(ROOT / "ops"))
     from kpop_gates import attach_kpop, kpop_has_failure
@@ -381,6 +634,223 @@ def test_attach_kpop_requires_full_docs_for_each_parser() -> None:
     assert kpop_has_failure(gated) is True
 
 
+def test_attach_kpop_requires_shared_docs_across_parsers() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    ok_metrics = _kpop_ok_metrics()
+    out = _synthetic_edit_similarity_out(
+        [
+            _ok_row("doc-a", "rpdf", ok_metrics),
+            _ok_row("doc-b", "rpdf", ok_metrics),
+            _ok_row("doc-c", "other", ok_metrics),
+            _ok_row("doc-d", "other", ok_metrics),
+        ],
+        expected_documents=2,
+    )
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["parser_document_counts"] == {"other": 2, "rpdf": 2}
+    assert per["shared_document_count"] == 0
+    assert per["kpop_documents_complete"] is False
+    assert per["kpop_all_rows_pass"] is False
+    assert kpop_has_failure(gated) is True
+
+
+def test_attach_kpop_counts_numeric_document_ids() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    ok_metrics = _kpop_ok_metrics()
+    out = _synthetic_edit_similarity_out(
+        [
+            _ok_row(1, "rpdf", ok_metrics),
+            _ok_row(2, "rpdf", ok_metrics),
+            _ok_row(1, "other", ok_metrics),
+            _ok_row(2, "other", ok_metrics),
+        ],
+        expected_documents=2,
+    )
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["document_count"] == 2
+    assert per["parser_document_counts"] == {"other": 2, "rpdf": 2}
+    assert per["kpop_documents_complete"] is True
+    assert per["kpop_all_rows_pass"] is True
+    assert kpop_has_failure(gated) is False
+
+
+def test_attach_kpop_requires_expected_document_metadata() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    ok_metrics = _kpop_ok_metrics()
+    out = {
+        "suite_computed_metrics": {"synthetic": ["edit_similarity"]},
+        "per_suite": {
+            "synthetic": {
+                "rows": [
+                    _ok_row("doc-a", "rpdf", ok_metrics),
+                    _ok_row("doc-a", "other", ok_metrics),
+                ]
+            }
+        },
+    }
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["expected_documents"] is None
+    assert per["kpop_documents_complete"] is False
+    assert per["kpop_all_rows_pass"] is False
+    assert kpop_has_failure(gated) is True
+
+
+def test_attach_kpop_normalizes_integral_float_document_ids() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop
+
+    ok_metrics = _kpop_ok_metrics()
+    out = _synthetic_edit_similarity_out(
+        [
+            _ok_row(1, "rpdf", ok_metrics),
+            _ok_row(1.0, "rpdf", ok_metrics),
+        ],
+        expected_documents=1,
+    )
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["document_count"] == 1
+    assert per["parser_document_counts"] == {"rpdf": 1}
+    assert per["kpop_documents_complete"] is True
+    assert per["kpop_all_rows_pass"] is True
+
+
+def test_attach_kpop_requires_valid_parser_names_for_coverage() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    ok_metrics = _kpop_ok_metrics()
+    out = {
+        "suite_computed_metrics": {"synthetic": ["edit_similarity"]},
+        "suite_expected_documents": {"synthetic": 2},
+        "per_suite": {
+            "synthetic": {
+                "rows": [
+                    {
+                        "document_id": "doc-a",
+                        "parser_name": None,
+                        "success": True,
+                        "metrics": ok_metrics,
+                    },
+                    {
+                        "document_id": "doc-b",
+                        "parser_name": None,
+                        "success": True,
+                        "metrics": ok_metrics,
+                    },
+                ]
+            }
+        },
+    }
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["parser_document_counts"] == {}
+    assert per["kpop_documents_complete"] is False
+    assert per["kpop_all_rows_pass"] is False
+    assert kpop_has_failure(gated) is True
+
+
+def test_attach_kpop_rejects_whitespace_parser_names_for_coverage() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    ok_metrics = _kpop_ok_metrics()
+    out = _synthetic_edit_similarity_out(
+        [
+            _ok_row("doc-a", "   ", ok_metrics),
+            _ok_row("doc-b", "   ", ok_metrics),
+        ],
+        expected_documents=2,
+    )
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["parser_document_counts"] == {}
+    assert per["kpop_documents_complete"] is False
+    assert per["kpop_all_rows_pass"] is False
+    assert kpop_has_failure(gated) is True
+
+
+def test_attach_kpop_fails_when_no_metrics_were_gated() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    out = {
+        "suite_computed_metrics": {"synthetic": []},
+        "suite_expected_documents": {"synthetic": 1},
+        "per_suite": {
+            "synthetic": {
+                "rows": [
+                    {
+                        "document_id": "doc-1",
+                        "parser_name": "rpdf",
+                        "success": True,
+                        "metrics": {},
+                    }
+                ]
+            }
+        },
+    }
+
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["gated_metrics"] == []
+    assert per["kpop_all_rows_pass"] is False
+    assert kpop_has_failure(gated) is True
+
+
+def test_attach_kpop_rejects_boolean_metric_values() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    out = {
+        "suite_computed_metrics": {"synthetic": ["edit_similarity"]},
+        "suite_expected_documents": {"synthetic": 1},
+        "per_suite": {
+            "synthetic": {
+                "rows": [
+                    {
+                        "document_id": "doc-1",
+                        "parser_name": "rpdf",
+                        "success": True,
+                        "metrics": {"edit_similarity": True},
+                    }
+                ]
+            }
+        },
+    }
+
+    gated = attach_kpop(out)
+    per = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert per["kpop_all_rows_pass"] is False
+    assert per["by_row"][0]["kpop_failed_gates"] == ["edit_similarity"]
+    assert kpop_has_failure(gated) is True
+
+
+def test_attach_kpop_fails_when_expected_suite_missing_from_results() -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_gates import attach_kpop, kpop_has_failure
+
+    out = {
+        "suite_computed_metrics": {"synthetic": ["edit_similarity"]},
+        "suite_expected_documents": {"synthetic": 1},
+        "per_suite": {},
+    }
+    gated = attach_kpop(out)
+    synthetic = gated["kpop_gates"]["per_suite"]["synthetic"]
+    assert synthetic["row_count"] == 0
+    assert synthetic["kpop_all_rows_pass"] is False
+    assert kpop_has_failure(gated) is True
+
+
 def test_gating_metrics_unknown_suite_defaults_to_five() -> None:
     sys.path.insert(0, str(ROOT / "ops"))
     from kpop_metric_ref import FIVE, gating_metrics_for_suite
@@ -416,7 +886,6 @@ def test_go_includes_elapsed_and_schema_with_stubbed_eval(
             rpdf_bin=rpdf,
             max_doc=None,
             no_suite_mp=False,
-            all_registry_parsers=False,
         )
     )
     j = json.loads(capsys.readouterr().out)
@@ -451,7 +920,6 @@ def test_go_disables_process_pool_with_no_suite_mp(
             rpdf_bin=rpdf,
             max_doc=None,
             no_suite_mp=True,
-            all_registry_parsers=False,
         )
     )
     assert not cap[0].use_process_pool
@@ -481,7 +949,6 @@ def test_go_wraps_bench_failures_in_click_exception(
                 rpdf_bin=rpdf,
                 max_doc=None,
                 no_suite_mp=True,
-                all_registry_parsers=False,
             )
         )
     assert "simulated config failure" in str(excinfo.value)
@@ -518,7 +985,6 @@ def test_go_wraps_attach_kpop_failures_in_click_exception(
                 rpdf_bin=rpdf,
                 max_doc=None,
                 no_suite_mp=True,
-                all_registry_parsers=False,
             )
         )
     assert "attach failed" in str(excinfo.value)
@@ -549,7 +1015,6 @@ def test_go_reraises_unexpected_error_when_traceback_env(
                 rpdf_bin=rpdf,
                 max_doc=None,
                 no_suite_mp=True,
-                all_registry_parsers=False,
             )
         )
     assert "simulated with traceback" in str(excinfo.value)
@@ -646,26 +1111,81 @@ def test_run_eval_allows_non_rpdf_parser_override_without_rpdf_binary(
             rpdf_only=False,
             max_doc=None,
             use_process_pool=False,
-            all_registry_parsers=True,
         )
     )
     assert out["parsers"] == ["other"]
 
 
-def test_run_eval_restores_rpdf_bin_after_success(
+def _mock_run_from_pack_deps(
+    monkeypatch: pytest.MonkeyPatch, should_raise: bool
+) -> None:
+    loader_mod = types.ModuleType("pdf_bench.loader")
+    runner_mod = types.ModuleType("pdf_bench.runner")
+    serialize_mod = types.ModuleType("kpop_serialize")
+    pkg = types.ModuleType("pdf_bench")
+
+    def _load_cfg(_path: Path) -> dict[str, object]:
+        return {"ok": True}
+
+    class _Runner:
+        def __init__(self, _cfg: object, parallel_workers: int) -> None:
+            assert parallel_workers == 0
+
+        def run(self) -> dict[str, object]:
+            if should_raise:
+                raise RuntimeError("boom")
+            return {"rows": []}
+
+    def _serialize(_bres: object) -> dict[str, object]:
+        return {"per_suite": {}}
+
+    loader_mod.load_benchmark_config = _load_cfg
+    runner_mod.BenchmarkRunner = _Runner
+    serialize_mod.serialize_bench = _serialize
+    pkg.loader = loader_mod
+    pkg.runner = runner_mod
+    monkeypatch.setitem(sys.modules, "pdf_bench", pkg)
+    monkeypatch.setitem(sys.modules, "pdf_bench.loader", loader_mod)
+    monkeypatch.setitem(sys.modules, "pdf_bench.runner", runner_mod)
+    monkeypatch.setitem(sys.modules, "kpop_serialize", serialize_mod)
+
+
+def test_run_from_pack_restores_rpdf_bin_after_success(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     sys.path.insert(0, str(ROOT / "ops"))
-    import kpop_exec
-    from evalparams import EvalParams
+    from kpop_loader import run_from_pack
 
-    bench = tmp_path / "bench"
-    (bench / "corpus").mkdir(parents=True)
-    rpdf = tmp_path / "target" / "release" / "rpdf"
-    rpdf.parent.mkdir(parents=True, exist_ok=True)
-    rpdf.write_text("x", encoding="utf-8")
+    yaml_path = tmp_path / "suite.yaml"
+    yaml_path.write_text("name: x\n", encoding="utf-8")
     monkeypatch.setenv("RPDF_BIN", "/tmp/original-rpdf")
-    monkeypatch.setattr(kpop_exec, "resolve_parsers", lambda *_a, **_k: ["rpdf"])
+    _mock_run_from_pack_deps(monkeypatch, should_raise=False)
+
+    out = run_from_pack((str(yaml_path), str(tmp_path), "/tmp/new-rpdf", 0))
+    assert "elapsed_seconds" in out
+    assert os.environ.get("RPDF_BIN") == "/tmp/original-rpdf"
+
+
+def test_run_from_pack_restores_rpdf_bin_after_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    from kpop_loader import run_from_pack
+
+    yaml_path = tmp_path / "suite.yaml"
+    yaml_path.write_text("name: x\n", encoding="utf-8")
+    monkeypatch.setenv("RPDF_BIN", "/tmp/original-rpdf")
+    _mock_run_from_pack_deps(monkeypatch, should_raise=True)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _ = run_from_pack((str(yaml_path), str(tmp_path), "/tmp/new-rpdf", 0))
+    assert os.environ.get("RPDF_BIN") == "/tmp/original-rpdf"
+
+
+def _stub_single_suite_run(
+    monkeypatch: pytest.MonkeyPatch, kpop_exec: object, parsers: list[str]
+) -> None:
+    monkeypatch.setattr(kpop_exec, "resolve_parsers", lambda *_a, **_k: parsers)
     monkeypatch.setattr(
         kpop_exec,
         "list_suite_rows",
@@ -684,6 +1204,48 @@ def test_run_eval_restores_rpdf_bin_after_success(
         lambda *_a, **_k: {"synthetic": {"rows": []}},
     )
 
+
+def test_run_eval_errors_when_override_filters_to_zero_parsers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    import kpop_exec
+    from evalparams import EvalParams
+
+    bench = tmp_path / "bench"
+    (bench / "corpus").mkdir(parents=True)
+    rpdf = tmp_path / "target" / "release" / "rpdf"
+    rpdf.parent.mkdir(parents=True, exist_ok=True)
+    rpdf.write_text("x", encoding="utf-8")
+    _stub_single_suite_run(monkeypatch, kpop_exec, [])
+
+    with pytest.raises(ValueError, match="no parsers selected"):
+        _ = kpop_exec.run_eval(
+            EvalParams(
+                bench=bench,
+                rpdf_bin=rpdf,
+                rpdf_only=False,
+                max_doc=None,
+                use_process_pool=False,
+            )
+        )
+
+
+def test_run_eval_restores_rpdf_bin_after_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sys.path.insert(0, str(ROOT / "ops"))
+    import kpop_exec
+    from evalparams import EvalParams
+
+    bench = tmp_path / "bench"
+    (bench / "corpus").mkdir(parents=True)
+    rpdf = tmp_path / "target" / "release" / "rpdf"
+    rpdf.parent.mkdir(parents=True, exist_ok=True)
+    rpdf.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("RPDF_BIN", "/tmp/original-rpdf")
+    _stub_single_suite_run(monkeypatch, kpop_exec, ["rpdf"])
+
     _ = kpop_exec.run_eval(
         EvalParams(
             bench=bench,
@@ -691,7 +1253,6 @@ def test_run_eval_restores_rpdf_bin_after_success(
             rpdf_only=False,
             max_doc=None,
             use_process_pool=False,
-            all_registry_parsers=True,
         )
     )
     assert os.environ.get("RPDF_BIN") == "/tmp/original-rpdf"
@@ -725,7 +1286,6 @@ def test_run_eval_restores_rpdf_bin_after_error(
                 rpdf_only=False,
                 max_doc=None,
                 use_process_pool=False,
-                all_registry_parsers=True,
             )
         )
     assert os.environ.get("RPDF_BIN") == "/tmp/original-rpdf"
